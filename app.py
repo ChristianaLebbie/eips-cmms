@@ -68,9 +68,7 @@ def load_ai4i_model_bundle():
     return joblib.load("ai4i_model_bundle.joblib")
 
 
-def run_ai4i_live_prediction(
-    air_temp, process_temp, rot_speed, torque, tool_wear, part_type
-):
+def run_ai4i_live_prediction(air_temp, process_temp, rot_speed, torque, tool_wear, part_type):
     """Real, live inference on the actual trained AI4I 2020 XGBoost model.
     This is a genuine new calculation from hand-entered sensor readings --
     it is not connected to a live physical sensor feed; no such feed exists
@@ -196,17 +194,9 @@ def list_users():
     )
 
 
-def run_live_prediction(
-    equipment_category,
-    manufacturer,
-    criticality,
-    completed_pms,
-    completed_wos,
-    days_since_pm,
-    days_since_wo,
-    time_on_pms,
-    time_on_wos,
-):
+def run_live_prediction(equipment_category, manufacturer, criticality,
+                         completed_pms, completed_wos, days_since_pm, days_since_wo,
+                         time_on_pms, time_on_wos):
     """Real, live inference: builds a single-row feature vector exactly the
     way the real training pipeline did, scales it with the real saved
     scaler, and runs it through the real trained XGBoost model -- a genuine
@@ -329,6 +319,7 @@ if track == "Case-Study (CMMS)":
         "PM / Task History",
         "Run Prediction",
         "New Machine Prediction",
+        "Upload Dataset (Batch Prediction)",
         "Explainability",
         "Alerts",
         "Prediction History",
@@ -516,80 +507,39 @@ elif page == "New Machine Prediction":
         col1, col2 = st.columns(2)
         equipment_category = col1.selectbox(
             "Equipment Category",
-            [
-                "MCC",
-                "MOTOR",
-                "LAUNDER",
-                "E STOP",
-                "PUMP",
-                "VALVE",
-                "MANUAL VALVE",
-                "CONVEYOR",
-                "GEARBOX",
-                "Unknown",
-            ],
+            ["MCC", "MOTOR", "LAUNDER", "E STOP", "PUMP", "VALVE",
+             "MANUAL VALVE", "CONVEYOR", "GEARBOX", "Unknown"],
         )
         manufacturer = col2.selectbox(
             "Manufacturer",
-            [
-                "K-AND-S-ELECTRICAL-AUTOMATION",
-                "WEG",
-                "ELECTRIC-CONTROL-PRODUCT",
-                "CMO-GL-Series",
-                "ABB",
-                "BRELKO",
-                "OUTOTEC",
-                "COMPAIR",
-                "BUCCANEER",
-                "Unknown",
-            ],
+            ["K-AND-S-ELECTRICAL-AUTOMATION", "WEG", "ELECTRIC-CONTROL-PRODUCT",
+             "CMO-GL-Series", "ABB", "BRELKO", "OUTOTEC", "COMPAIR",
+             "BUCCANEER", "Unknown"],
         )
         criticality = st.selectbox(
             "Criticality Classification",
-            [
-                "C1 - High Criticality Equipment",
-                "C2 - Medium Criticality Equipment",
-                "C3 - Low Criticality Equipment",
-                "Unknown",
-            ],
+            ["C1 - High Criticality Equipment", "C2 - Medium Criticality Equipment",
+             "C3 - Low Criticality Equipment", "Unknown"],
         )
         col3, col4 = st.columns(2)
         completed_pms = col3.number_input("Total Completed PMs", min_value=0, value=10)
         completed_wos = col4.number_input("Total Completed WOs", min_value=0, value=5)
         col5, col6 = st.columns(2)
-        days_since_pm = col5.number_input(
-            "Days Since Last Completed PM", min_value=0, value=30
-        )
-        days_since_wo = col6.number_input(
-            "Days Since Last Completed WO", min_value=0, value=30
-        )
+        days_since_pm = col5.number_input("Days Since Last Completed PM", min_value=0, value=30)
+        days_since_wo = col6.number_input("Days Since Last Completed WO", min_value=0, value=30)
         col7, col8 = st.columns(2)
-        time_on_pms = col7.number_input(
-            "Total Time Spent on PMs (minutes)", min_value=0, value=120
-        )
-        time_on_wos = col8.number_input(
-            "Total Time Spent on WOs (minutes)", min_value=0, value=60
-        )
+        time_on_pms = col7.number_input("Total Time Spent on PMs (minutes)", min_value=0, value=120)
+        time_on_wos = col8.number_input("Total Time Spent on WOs (minutes)", min_value=0, value=60)
 
-        predict_submitted = st.form_submit_button(
-            "Run Live Prediction", use_container_width=True
-        )
+        predict_submitted = st.form_submit_button("Run Live Prediction", use_container_width=True)
 
     if predict_submitted:
         proba, top_factors = run_live_prediction(
-            equipment_category,
-            manufacturer,
-            criticality,
-            completed_pms,
-            completed_wos,
-            days_since_pm,
-            days_since_wo,
-            time_on_pms,
-            time_on_wos,
+            equipment_category, manufacturer, criticality,
+            completed_pms, completed_wos, days_since_pm, days_since_wo,
+            time_on_pms, time_on_wos,
         )
-        priority = (
-            "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
-        )
+        priority = "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
 
         st.success("Live prediction computed.")
         c1, c2 = st.columns(2)
@@ -604,6 +554,85 @@ elif page == "New Machine Prediction":
             "not a stored lookup. The inputs above were never seen by the "
             "model during training."
         )
+
+elif page == "Upload Dataset (Batch Prediction)":
+    st.title("Upload Dataset (Batch Prediction)")
+    st.write(
+        "Upload a CSV or Excel file of machines to get real, live predictions "
+        "for every row from the actual trained XGBoost model. The file should "
+        "have columns matching the real case-study schema: **Asset Name, "
+        "Equipment Category, Manufacturer, Criticality Classification, Total "
+        "Completed PMs, Total Completed WOs, days_since_last_completed_pm, "
+        "days_since_last_completed_wo, Total time spent on PMs in minutes, "
+        "Total time spent on WOs in minutes.** Missing columns are treated as "
+        "0 or Unknown, matching how the original model was trained."
+    )
+
+    uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx"])
+
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith(".csv"):
+            uploaded_df = pd.read_csv(uploaded_file)
+        else:
+            uploaded_df = pd.read_excel(uploaded_file)
+
+        st.write(f"File loaded: {len(uploaded_df):,} rows, {len(uploaded_df.columns)} columns")
+        st.dataframe(uploaded_df.head(10), use_container_width=True)
+
+        if st.button("Run Batch Prediction on This File", use_container_width=True):
+            bundle = load_model_bundle()
+            model = bundle["model"]
+            scaler = bundle["scaler"]
+            num_cols = bundle["num_cols"]
+            feature_columns = bundle["feature_columns"]
+
+            n = len(uploaded_df)
+            X = pd.DataFrame(0, index=range(n), columns=feature_columns)
+            for col in num_cols:
+                if col in uploaded_df.columns:
+                    X[col] = pd.to_numeric(uploaded_df[col], errors="coerce").fillna(0).values
+
+            for idx in range(n):
+                if "Equipment Category" in uploaded_df.columns:
+                    cat_col = f"Equipment Category_{uploaded_df.loc[idx, 'Equipment Category']}"
+                    if cat_col in X.columns:
+                        X.loc[idx, cat_col] = 1
+                if "Manufacturer" in uploaded_df.columns:
+                    man_col = f"Manufacturer_{uploaded_df.loc[idx, 'Manufacturer']}"
+                    if man_col in X.columns:
+                        X.loc[idx, man_col] = 1
+                if "Criticality Classification" in uploaded_df.columns:
+                    crit_col = f"Criticality Classification_{uploaded_df.loc[idx, 'Criticality Classification']}"
+                    if crit_col in X.columns:
+                        X.loc[idx, crit_col] = 1
+
+            X_scaled = X.copy()
+            X_scaled[num_cols] = scaler.transform(X[num_cols])
+            proba = model.predict_proba(X_scaled)[:, 1]
+
+            results = uploaded_df.copy()
+            results["failure_probability"] = proba
+            results["intervention_priority"] = np.where(
+                proba >= 0.5, "High Risk", np.where(proba >= 0.2, "Watch", "Normal")
+            )
+
+            st.success(f"Real batch prediction complete for {n:,} rows.")
+            st.dataframe(
+                results.sort_values("failure_probability", ascending=False),
+                use_container_width=True,
+                height=500,
+            )
+            st.download_button(
+                "Download predictions as CSV",
+                results.to_csv(index=False).encode("utf-8"),
+                "batch_predictions.csv",
+                "text/csv",
+            )
+            st.caption(
+                "These are genuine, live predictions computed from the uploaded "
+                "data through the same real trained model used throughout this "
+                "system -- not stored lookups."
+            )
 
 elif page == "Explainability":
     st.title("Explainability (SHAP)")
@@ -881,9 +910,7 @@ elif page == "New Sensor Reading Prediction":
     with st.form("sensor_prediction_form"):
         col1, col2 = st.columns(2)
         air_temp = col1.number_input("Air Temperature (K)", value=300.0, step=0.1)
-        process_temp = col2.number_input(
-            "Process Temperature (K)", value=310.0, step=0.1
-        )
+        process_temp = col2.number_input("Process Temperature (K)", value=310.0, step=0.1)
         col3, col4 = st.columns(2)
         rot_speed = col3.number_input("Rotational Speed (rpm)", value=1500, step=10)
         torque = col4.number_input("Torque (Nm)", value=40.0, step=0.5)
@@ -891,9 +918,7 @@ elif page == "New Sensor Reading Prediction":
         tool_wear = col5.number_input("Tool Wear (min)", value=50, step=1)
         part_type = col6.selectbox("Part Quality Type", ["H", "M", "L"])
 
-        sensor_submitted = st.form_submit_button(
-            "Run Live Sensor Prediction", use_container_width=True
-        )
+        sensor_submitted = st.form_submit_button("Run Live Sensor Prediction", use_container_width=True)
 
     if sensor_submitted:
         proba, top_factors = run_ai4i_live_prediction(
