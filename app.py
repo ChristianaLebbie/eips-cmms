@@ -63,6 +63,44 @@ def load_model_bundle():
     return joblib.load("model_bundle.joblib")
 
 
+@st.cache_resource
+def load_ai4i_model_bundle():
+    return joblib.load("ai4i_model_bundle.joblib")
+
+
+def run_ai4i_live_prediction(
+    air_temp, process_temp, rot_speed, torque, tool_wear, part_type
+):
+    """Real, live inference on the actual trained AI4I 2020 XGBoost model.
+    This is a genuine new calculation from hand-entered sensor readings --
+    it is not connected to a live physical sensor feed; no such feed exists
+    for this public benchmark dataset, and this thesis never claims one."""
+    bundle = load_ai4i_model_bundle()
+    model = bundle["model"]
+    scaler = bundle["scaler"]
+    num_cols = bundle["num_cols"]
+    feature_columns = bundle["feature_columns"]
+
+    row = {c: 0 for c in feature_columns}
+    row["Air_temperature_K"] = air_temp
+    row["Process_temperature_K"] = process_temp
+    row["Rotational_speed_rpm"] = rot_speed
+    row["Torque_Nm"] = torque
+    row["Tool_wear_min"] = tool_wear
+    row[f"Type_{part_type}"] = 1
+
+    X = pd.DataFrame([row])[feature_columns]
+    X_scaled = X.copy()
+    X_scaled[num_cols] = scaler.transform(X[num_cols])
+    proba = float(model.predict_proba(X_scaled)[:, 1][0])
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_scaled)[0]
+    top_idx = np.argsort(-np.abs(shap_values))[:5]
+    top_factors = [(feature_columns[i], float(shap_values[i])) for i in top_idx]
+    return proba, top_factors
+
+
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
@@ -306,6 +344,7 @@ else:
         "Navigate",
         [
             "Sensor Overview",
+            "New Sensor Reading Prediction",
             "Sensor Component I",
             "Sensor Component II",
             "Sensor Model Performance",
@@ -336,11 +375,15 @@ if page == "Dashboard":
     st.bar_chart(dist)
 
     st.subheader("Highest-priority machines")
-    st.dataframe(
-        preds[preds.intervention_priority == "High Risk"].head(20)[
-            ["machine_id", "equipment_category", "criticality", "failure_probability"]
-        ],
-        use_container_width=True,
+    high_risk_table = preds[preds.intervention_priority == "High Risk"][
+        ["machine_id", "equipment_category", "criticality", "failure_probability"]
+    ]
+    st.dataframe(high_risk_table.head(20), use_container_width=True)
+    st.download_button(
+        "Download all High Risk machines as CSV",
+        high_risk_table.to_csv(index=False).encode("utf-8"),
+        "high_risk_machines_export.csv",
+        "text/csv",
     )
 
 elif page == "Asset Register":
@@ -376,6 +419,12 @@ elif page == "Asset Register":
         "Total Completed WOs",
     ]
     st.dataframe(filtered[display_cols], use_container_width=True, height=500)
+    st.download_button(
+        "Download this view as CSV",
+        filtered[display_cols].to_csv(index=False).encode("utf-8"),
+        "asset_register_export.csv",
+        "text/csv",
+    )
 
 elif page == "Work Orders":
     st.title("Work Orders")
@@ -396,6 +445,12 @@ elif page == "Work Orders":
 
     st.write(f"{len(filtered):,} work orders match the current filter")
     st.dataframe(filtered, use_container_width=True, height=500)
+    st.download_button(
+        "Download this view as CSV",
+        filtered.to_csv(index=False).encode("utf-8"),
+        "work_orders_export.csv",
+        "text/csv",
+    )
 
     st.subheader("Work Type distribution")
     st.bar_chart(wo["WorkType"].value_counts())
@@ -416,6 +471,12 @@ elif page == "PM / Task History":
 
     st.write(f"{len(filtered):,} tasks match the current search")
     st.dataframe(filtered, use_container_width=True, height=500)
+    st.download_button(
+        "Download this view as CSV",
+        filtered.to_csv(index=False).encode("utf-8"),
+        "task_history_export.csv",
+        "text/csv",
+    )
 
     st.subheader("Downtime distribution (minutes)")
     nonzero = th[th["Downtime in Minutes"] > 0]
@@ -587,6 +648,12 @@ elif page == "Alerts":
         alerts = alerts[alerts.status == "open"]
     st.write(f"{len(alerts):,} alerts")
     st.dataframe(alerts, use_container_width=True, height=500)
+    st.download_button(
+        "Download alerts as CSV",
+        alerts.to_csv(index=False).encode("utf-8"),
+        "alerts_export.csv",
+        "text/csv",
+    )
 
 elif page == "Prediction History":
     st.title("Prediction History")
@@ -799,6 +866,47 @@ elif page == "Sensor Overview":
         "Use the pages on the left to see each dataset's real Component I, "
         "Component II, and model-comparison results."
     )
+
+elif page == "New Sensor Reading Prediction":
+    st.title("New Sensor Reading Prediction (Live Inference)")
+    st.warning(
+        "Honest note: this is a genuine, live prediction from the actual trained "
+        "AI4I 2020 model, computed fresh from the values you enter below. It is "
+        "NOT connected to a live physical sensor or IoT feed -- AI4I 2020 is a "
+        "fixed, historical public benchmark dataset, and this thesis never claims "
+        "real-time hardware integration. Real-time sensor integration remains "
+        "future work."
+    )
+
+    with st.form("sensor_prediction_form"):
+        col1, col2 = st.columns(2)
+        air_temp = col1.number_input("Air Temperature (K)", value=300.0, step=0.1)
+        process_temp = col2.number_input(
+            "Process Temperature (K)", value=310.0, step=0.1
+        )
+        col3, col4 = st.columns(2)
+        rot_speed = col3.number_input("Rotational Speed (rpm)", value=1500, step=10)
+        torque = col4.number_input("Torque (Nm)", value=40.0, step=0.5)
+        col5, col6 = st.columns(2)
+        tool_wear = col5.number_input("Tool Wear (min)", value=50, step=1)
+        part_type = col6.selectbox("Part Quality Type", ["H", "M", "L"])
+
+        sensor_submitted = st.form_submit_button(
+            "Run Live Sensor Prediction", use_container_width=True
+        )
+
+    if sensor_submitted:
+        proba, top_factors = run_ai4i_live_prediction(
+            air_temp, process_temp, rot_speed, torque, tool_wear, part_type
+        )
+        st.success("Live prediction computed from the real trained AI4I 2020 model.")
+        c1, c2 = st.columns(2)
+        c1.metric("Failure probability", f"{proba:.3f}")
+        c2.metric("Predicted outcome", "Failure" if proba >= 0.5 else "No Failure")
+
+        st.subheader("Top factors driving this specific prediction (real SHAP values)")
+        factors_df = pd.DataFrame(top_factors, columns=["Feature", "SHAP value"])
+        st.dataframe(factors_df, use_container_width=True)
 
 elif page == "Sensor Component I":
     st.title("Sensor-Detection Track: Component I (Statistical Analysis)")
