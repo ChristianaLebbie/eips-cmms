@@ -8,20 +8,23 @@ natively (no external BI tool).
 
 Run with: streamlit run app.py
 """
-import sqlite3
+
 import hashlib
+import sqlite3
 from datetime import datetime, timezone
 
+import joblib
 import numpy as np
 import pandas as pd
+import shap
 import streamlit as st
-import joblib
 
 DB_PATH = "cmms_system.db"
 
-st.set_page_config(page_title="EIPS-CMMS", layout="wide", page_icon="\u26CF")
+st.set_page_config(page_title="EIPS-CMMS", layout="wide", page_icon="\u26cf")
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 .stApp {
     background: linear-gradient(180deg, #0F2340 0%, #16324F 100%);
@@ -45,7 +48,9 @@ div[data-testid="stDataFrame"] { background-color: #16324F; }
     border: 1px solid #2A4A6E; max-width: 420px; margin: 3rem auto;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource
@@ -123,7 +128,10 @@ def load_work_orders():
 def get_user(username):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, username, password_hash, full_name, role FROM users WHERE username = ?", (username,))
+    cur.execute(
+        "SELECT id, username, password_hash, full_name, role FROM users WHERE username = ?",
+        (username,),
+    )
     return cur.fetchone()
 
 
@@ -132,25 +140,94 @@ def create_user(username, password, full_name, role):
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (username, password_hash, full_name, role, created_at) VALUES (?,?,?,?,?)",
-        (username, hash_pw(password), full_name, role, datetime.now(timezone.utc).isoformat())
+        (
+            username,
+            hash_pw(password),
+            full_name,
+            role,
+            datetime.now(timezone.utc).isoformat(),
+        ),
     )
     conn.commit()
 
 
 def list_users():
     conn = get_connection()
-    return pd.read_sql_query("SELECT username, full_name, role, created_at FROM users", conn)
+    return pd.read_sql_query(
+        "SELECT username, full_name, role, created_at FROM users", conn
+    )
+
+
+def run_live_prediction(
+    equipment_category,
+    manufacturer,
+    criticality,
+    completed_pms,
+    completed_wos,
+    days_since_pm,
+    days_since_wo,
+    time_on_pms,
+    time_on_wos,
+):
+    """Real, live inference: builds a single-row feature vector exactly the
+    way the real training pipeline did, scales it with the real saved
+    scaler, and runs it through the real trained XGBoost model -- a genuine
+    new prediction, not a lookup."""
+    bundle = load_model_bundle()
+    model = bundle["model"]
+    scaler = bundle["scaler"]
+    num_cols = bundle["num_cols"]
+    feature_columns = bundle["feature_columns"]
+
+    row = {c: 0 for c in feature_columns}
+    row["Total Completed PMs"] = completed_pms
+    row["Total Completed WOs"] = completed_wos
+    row["days_since_last_completed_pm"] = days_since_pm
+    row["days_since_last_completed_wo"] = days_since_wo
+    row["Total time spent on PMs in minutes"] = time_on_pms
+    row["Total time spent on WOs in minutes"] = time_on_wos
+
+    cat_col_name = f"Equipment Category_{equipment_category}"
+    if cat_col_name in row:
+        row[cat_col_name] = 1
+    man_col_name = f"Manufacturer_{manufacturer}"
+    if man_col_name in row:
+        row[man_col_name] = 1
+    crit_col_name = f"Criticality Classification_{criticality}"
+    if crit_col_name in row:
+        row[crit_col_name] = 1
+
+    X = pd.DataFrame([row])[feature_columns]
+    X_scaled = X.copy()
+    X_scaled[num_cols] = scaler.transform(X[num_cols])
+
+    proba = float(model.predict_proba(X_scaled)[:, 1][0])
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_scaled)[0]
+    top_idx = np.argsort(-np.abs(shap_values))[:5]
+    top_factors = [(feature_columns[i], float(shap_values[i])) for i in top_idx]
+
+    return proba, top_factors
 
 
 def update_user(username, new_full_name=None, new_password=None, new_role=None):
     conn = get_connection()
     cur = conn.cursor()
     if new_full_name:
-        cur.execute("UPDATE users SET full_name = ? WHERE username = ?", (new_full_name, username))
+        cur.execute(
+            "UPDATE users SET full_name = ? WHERE username = ?",
+            (new_full_name, username),
+        )
     if new_password:
-        cur.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_pw(new_password), username))
+        cur.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (hash_pw(new_password), username),
+        )
     if new_role:
-        cur.execute("UPDATE users SET role = ? WHERE username = ?", (new_role, username))
+        cur.execute(
+            "UPDATE users SET role = ? WHERE username = ?", (new_role, username)
+        )
     conn.commit()
 
 
@@ -158,8 +235,14 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.markdown("<h1 style='text-align:center; margin-top:2rem;'>\u26CF EIPS-CMMS</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center; color:#AEBFD1;'>Explainable Intervention Priority System for CMMS</p>", unsafe_allow_html=True)
+    st.markdown(
+        "<h1 style='text-align:center; margin-top:2rem;'>\u26cf EIPS-CMMS</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='text-align:center; color:#AEBFD1;'>Explainable Intervention Priority System for CMMS</p>",
+        unsafe_allow_html=True,
+    )
 
     with st.container():
         st.markdown('<div class="login-card">', unsafe_allow_html=True)
@@ -178,42 +261,68 @@ if not st.session_state.logged_in:
                 st.rerun()
             else:
                 st.error("Incorrect username or password.")
-        st.caption("Accounts are provisioned by the system administrator only. "
-                   "If you need access, contact your administrator.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.caption(
+            "Accounts are provisioned by the system administrator only. "
+            "If you need access, contact your administrator."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 
-st.sidebar.markdown(f"### \u26CF EIPS-CMMS")
-st.sidebar.caption(f"Signed in as **{st.session_state.full_name}** ({st.session_state.role})")
+st.sidebar.markdown("### \u26cf EIPS-CMMS")
+st.sidebar.caption(
+    f"Signed in as **{st.session_state.full_name}** ({st.session_state.role})"
+)
 if st.sidebar.button("Log out"):
     st.session_state.logged_in = False
     st.rerun()
 st.sidebar.markdown("---")
 
-track = st.sidebar.radio("Track", ["Case-Study (CMMS)", "Sensor-Detection (AI4I 2020 / Azure PdM)"])
+track = st.sidebar.radio(
+    "Track", ["Case-Study (CMMS)", "Sensor-Detection (AI4I 2020 / Azure PdM)"]
+)
 st.sidebar.markdown("---")
 
 if track == "Case-Study (CMMS)":
-    nav_options = ["Dashboard", "Asset Register", "Work Orders", "PM / Task History",
-                    "Run Prediction", "Explainability", "Alerts", "Prediction History",
-                    "Model Performance", "Peer-Adjusted Analysis", "System Information"]
+    nav_options = [
+        "Dashboard",
+        "Asset Register",
+        "Work Orders",
+        "PM / Task History",
+        "Run Prediction",
+        "New Machine Prediction",
+        "Explainability",
+        "Alerts",
+        "Prediction History",
+        "Model Performance",
+        "Peer-Adjusted Analysis",
+        "System Information",
+    ]
     if st.session_state.role == "admin":
         nav_options.append("Admin: User Management")
     page = st.sidebar.radio("Navigate", nav_options)
 else:
-    page = st.sidebar.radio("Navigate", ["Sensor Overview", "Sensor Component I",
-                                          "Sensor Component II", "Sensor Model Performance"])
+    page = st.sidebar.radio(
+        "Navigate",
+        [
+            "Sensor Overview",
+            "Sensor Component I",
+            "Sensor Component II",
+            "Sensor Model Performance",
+        ],
+    )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("All analysis, dashboards, and reporting are delivered "
-                    "directly inside this application. No external BI tool is used. "
-                    "The two tracks above are kept strictly separate.")
+st.sidebar.caption(
+    "All analysis, dashboards, and reporting are delivered "
+    "directly inside this application. No external BI tool is used. "
+    "The two tracks above are kept strictly separate."
+)
 
 preds = load_predictions_df()
 
 if page == "Dashboard":
-    st.title("\u26CF EIPS-CMMS Dashboard")
+    st.title("\u26cf EIPS-CMMS Dashboard")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Machines tracked", f"{len(preds):,}")
     col2.metric("High Risk", f"{(preds.intervention_priority == 'High Risk').sum():,}")
@@ -228,8 +337,9 @@ if page == "Dashboard":
 
     st.subheader("Highest-priority machines")
     st.dataframe(
-        preds[preds.intervention_priority == "High Risk"]
-        .head(20)[["machine_id", "equipment_category", "criticality", "failure_probability"]],
+        preds[preds.intervention_priority == "High Risk"].head(20)[
+            ["machine_id", "equipment_category", "criticality", "failure_probability"]
+        ],
         use_container_width=True,
     )
 
@@ -239,8 +349,12 @@ elif page == "Asset Register":
     st.write(f"{len(ar):,} real registered assets")
 
     col1, col2 = st.columns(2)
-    cat_filter = col1.multiselect("Equipment Category", sorted(ar["Equipment Category"].dropna().unique())[:50])
-    hier_filter = col2.multiselect("Hierarchy Level", sorted(ar["Hierarchy_Level"].dropna().unique()))
+    cat_filter = col1.multiselect(
+        "Equipment Category", sorted(ar["Equipment Category"].dropna().unique())[:50]
+    )
+    hier_filter = col2.multiselect(
+        "Hierarchy Level", sorted(ar["Hierarchy_Level"].dropna().unique())
+    )
 
     filtered = ar.copy()
     if cat_filter:
@@ -249,9 +363,18 @@ elif page == "Asset Register":
         filtered = filtered[filtered["Hierarchy_Level"].isin(hier_filter)]
 
     st.write(f"{len(filtered):,} assets match the current filter")
-    display_cols = ["Asset Name", "Equipment Category", "Equipment Description", "Manufacturer",
-                     "Criticality Classification", "Hierarchy_Level", "Overdue PMs", "Overdue WOs",
-                     "Total Completed PMs", "Total Completed WOs"]
+    display_cols = [
+        "Asset Name",
+        "Equipment Category",
+        "Equipment Description",
+        "Manufacturer",
+        "Criticality Classification",
+        "Hierarchy_Level",
+        "Overdue PMs",
+        "Overdue WOs",
+        "Total Completed PMs",
+        "Total Completed WOs",
+    ]
     st.dataframe(filtered[display_cols], use_container_width=True, height=500)
 
 elif page == "Work Orders":
@@ -260,7 +383,9 @@ elif page == "Work Orders":
     st.write(f"{len(wo):,} real work order records")
 
     col1, col2 = st.columns(2)
-    type_filter = col1.multiselect("Work Type", sorted(wo["WorkType"].dropna().unique()))
+    type_filter = col1.multiselect(
+        "Work Type", sorted(wo["WorkType"].dropna().unique())
+    )
     status_filter = col2.multiselect("Status", sorted(wo["Status"].dropna().unique()))
 
     filtered = wo.copy()
@@ -283,7 +408,11 @@ elif page == "PM / Task History":
     asset_filter = st.text_input("Search by Asset Name (partial match)")
     filtered = th.copy()
     if asset_filter:
-        filtered = filtered[filtered["Asset Name"].astype(str).str.contains(asset_filter, case=False, na=False)]
+        filtered = filtered[
+            filtered["Asset Name"]
+            .astype(str)
+            .str.contains(asset_filter, case=False, na=False)
+        ]
 
     st.write(f"{len(filtered):,} tasks match the current search")
     st.dataframe(filtered, use_container_width=True, height=500)
@@ -296,8 +425,10 @@ elif page == "PM / Task History":
 
 elif page == "Run Prediction":
     st.title("Run Prediction")
-    st.write("Select a machine to view its real, already-computed prediction "
-             "from the active model (XGBoost).")
+    st.write(
+        "Select a machine to view its real, already-computed prediction "
+        "from the active model (XGBoost)."
+    )
     machine_id = st.selectbox("Machine", preds["machine_id"].tolist())
     row = preds[preds.machine_id == machine_id].iloc[0]
 
@@ -312,16 +443,123 @@ elif page == "Run Prediction":
         "on the held-out test set)."
     )
 
+elif page == "New Machine Prediction":
+    st.title("New Machine Prediction (Live Inference)")
+    st.write(
+        "Enter a machine's real attributes below to get a genuine, live "
+        "prediction from the actual trained XGBoost model -- computed fresh "
+        "right now, not looked up from a stored result."
+    )
+
+    with st.form("new_machine_form"):
+        col1, col2 = st.columns(2)
+        equipment_category = col1.selectbox(
+            "Equipment Category",
+            [
+                "MCC",
+                "MOTOR",
+                "LAUNDER",
+                "E STOP",
+                "PUMP",
+                "VALVE",
+                "MANUAL VALVE",
+                "CONVEYOR",
+                "GEARBOX",
+                "Unknown",
+            ],
+        )
+        manufacturer = col2.selectbox(
+            "Manufacturer",
+            [
+                "K-AND-S-ELECTRICAL-AUTOMATION",
+                "WEG",
+                "ELECTRIC-CONTROL-PRODUCT",
+                "CMO-GL-Series",
+                "ABB",
+                "BRELKO",
+                "OUTOTEC",
+                "COMPAIR",
+                "BUCCANEER",
+                "Unknown",
+            ],
+        )
+        criticality = st.selectbox(
+            "Criticality Classification",
+            [
+                "C1 - High Criticality Equipment",
+                "C2 - Medium Criticality Equipment",
+                "C3 - Low Criticality Equipment",
+                "Unknown",
+            ],
+        )
+        col3, col4 = st.columns(2)
+        completed_pms = col3.number_input("Total Completed PMs", min_value=0, value=10)
+        completed_wos = col4.number_input("Total Completed WOs", min_value=0, value=5)
+        col5, col6 = st.columns(2)
+        days_since_pm = col5.number_input(
+            "Days Since Last Completed PM", min_value=0, value=30
+        )
+        days_since_wo = col6.number_input(
+            "Days Since Last Completed WO", min_value=0, value=30
+        )
+        col7, col8 = st.columns(2)
+        time_on_pms = col7.number_input(
+            "Total Time Spent on PMs (minutes)", min_value=0, value=120
+        )
+        time_on_wos = col8.number_input(
+            "Total Time Spent on WOs (minutes)", min_value=0, value=60
+        )
+
+        predict_submitted = st.form_submit_button(
+            "Run Live Prediction", use_container_width=True
+        )
+
+    if predict_submitted:
+        proba, top_factors = run_live_prediction(
+            equipment_category,
+            manufacturer,
+            criticality,
+            completed_pms,
+            completed_wos,
+            days_since_pm,
+            days_since_wo,
+            time_on_pms,
+            time_on_wos,
+        )
+        priority = (
+            "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
+        )
+
+        st.success("Live prediction computed.")
+        c1, c2 = st.columns(2)
+        c1.metric("Failure probability", f"{proba:.3f}")
+        c2.metric("Intervention priority", priority)
+
+        st.subheader("Top factors driving this specific prediction (real SHAP values)")
+        factors_df = pd.DataFrame(top_factors, columns=["Feature", "SHAP value"])
+        st.dataframe(factors_df, use_container_width=True)
+        st.caption(
+            "This is a genuine, live prediction from the real trained model -- "
+            "not a stored lookup. The inputs above were never seen by the "
+            "model during training."
+        )
+
 elif page == "Explainability":
     st.title("Explainability (SHAP)")
-    machine_id = st.selectbox("Machine", preds["machine_id"].tolist(), key="explain_machine")
+    machine_id = st.selectbox(
+        "Machine", preds["machine_id"].tolist(), key="explain_machine"
+    )
     row = preds[preds.machine_id == machine_id].iloc[0]
     explanations = load_explanations(int(row.prediction_id))
 
-    st.write(f"**{machine_id}** -- predicted probability: **{row.failure_probability:.3f}** "
-             f"({row.intervention_priority})")
-    st.write("Top features driving this specific prediction (real SHAP values, "
-             "from the actual fitted model, not illustrative):")
+    st.write(
+        f"**{machine_id}** -- predicted probability: **{row.failure_probability:.3f}** "
+        f"({row.intervention_priority})"
+    )
+    st.write(
+        "Top features driving this specific prediction (real SHAP values, "
+        "from the actual fitted model, not illustrative):"
+    )
 
     chart_df = explanations.set_index("feature_name")
     st.bar_chart(chart_df["shap_value"])
@@ -329,8 +567,10 @@ elif page == "Explainability":
 
     st.subheader("Model-level feature importance (real SHAP summary)")
     st.image("images/fig5_5_shap_xgb-1.png", use_container_width=True)
-    st.caption("TabPFN is not tree-based, so SHAP's TreeExplainer does not apply to it. "
-               "Group-level permutation importance was used instead for TabPFN, shown below.")
+    st.caption(
+        "TabPFN is not tree-based, so SHAP's TreeExplainer does not apply to it. "
+        "Group-level permutation importance was used instead for TabPFN, shown below."
+    )
     st.image("images/fig5_14_tabpfn_groupimportance-1.png", use_container_width=True)
 
     st.caption(
@@ -354,30 +594,43 @@ elif page == "Prediction History":
     history = pd.read_sql_query(
         "SELECT mv.model_name, mv.version, p.created_at, COUNT(*) as n_predictions "
         "FROM predictions p JOIN model_versions mv ON p.model_version_id = mv.id "
-        "GROUP BY mv.model_name, mv.version, p.created_at", conn
+        "GROUP BY mv.model_name, mv.version, p.created_at",
+        conn,
     )
     st.dataframe(history, use_container_width=True)
-    st.caption("Only one prediction run exists so far (the initial real run on "
-               "the 4,024-asset population). Future retraining runs will add "
-               "new rows here, each traceable to its own model version.")
+    st.caption(
+        "Only one prediction run exists so far (the initial real run on "
+        "the 4,024-asset population). Future retraining runs will add "
+        "new rows here, each traceable to its own model version."
+    )
 
 elif page == "Model Performance":
     st.title("Model Performance")
     st.write("Real, independently-verified results across all three candidate models:")
 
-    perf = pd.DataFrame({
-        "Model": ["Logistic Regression", "XGBoost", "TabPFN"],
-        "PR-AUC": [0.5764, 0.7288, 0.8123],
-        "ROC-AUC": [0.9173, 0.9457, 0.9650],
-        "F1": [0.5638, 0.6028, 0.7104],
-        "Recall": [0.8936, 0.9149, 0.6525],
-        "Precision": [0.4118, 0.4495, 0.7797],
-    })
+    perf = pd.DataFrame(
+        {
+            "Model": ["Logistic Regression", "XGBoost", "TabPFN"],
+            "PR-AUC": [0.5764, 0.7288, 0.8123],
+            "ROC-AUC": [0.9173, 0.9457, 0.9650],
+            "F1": [0.5638, 0.6028, 0.7104],
+            "Recall": [0.8936, 0.9149, 0.6525],
+            "Precision": [0.4118, 0.4495, 0.7797],
+        }
+    )
     st.dataframe(perf, use_container_width=True)
 
     col1, col2 = st.columns(2)
-    col1.image("images/fig5_1_prauc-1.png", caption="PR-AUC comparison (real results)", use_container_width=True)
-    col2.image("images/fig5_2_rocauc-1.png", caption="ROC-AUC comparison (real results)", use_container_width=True)
+    col1.image(
+        "images/fig5_1_prauc-1.png",
+        caption="PR-AUC comparison (real results)",
+        use_container_width=True,
+    )
+    col2.image(
+        "images/fig5_2_rocauc-1.png",
+        caption="ROC-AUC comparison (real results)",
+        use_container_width=True,
+    )
 
     st.subheader("Precision-Recall and ROC Curves")
     col3, col4 = st.columns(2)
@@ -386,10 +639,22 @@ elif page == "Model Performance":
 
     st.subheader("Confusion Matrices (Test Set)")
     col5, col6 = st.columns(2)
-    col5.image("images/fig5_3_cm_xgb_casestudy-1.png", caption="XGBoost", use_container_width=True)
-    col6.image("images/fig5_4_cm_tabpfn_casestudy-1.png", caption="TabPFN", use_container_width=True)
+    col5.image(
+        "images/fig5_3_cm_xgb_casestudy-1.png",
+        caption="XGBoost",
+        use_container_width=True,
+    )
+    col6.image(
+        "images/fig5_4_cm_tabpfn_casestudy-1.png",
+        caption="TabPFN",
+        use_container_width=True,
+    )
 
-    st.image("images/fig5_threshold_xgb-1.png", caption="XGBoost decision-threshold analysis (real)", use_container_width=True)
+    st.image(
+        "images/fig5_threshold_xgb-1.png",
+        caption="XGBoost decision-threshold analysis (real)",
+        use_container_width=True,
+    )
 
     st.info(
         "XGBoost is the model actually deployed for inference in this system. "
@@ -412,10 +677,16 @@ elif page == "Peer-Adjusted Analysis":
     c3.metric("Bootstrap stability (ARI)", "0.7912")
 
     st.subheader("Ranking strategy overlap (top 15 each)")
-    overlap = pd.DataFrame({
-        "Comparison": ["Raw-count vs Peer-adjusted", "Raw-count vs Global anomaly", "Peer-adjusted vs Global anomaly"],
-        "Overlap (of 15)": [12, 13, 14],
-    })
+    overlap = pd.DataFrame(
+        {
+            "Comparison": [
+                "Raw-count vs Peer-adjusted",
+                "Raw-count vs Global anomaly",
+                "Peer-adjusted vs Global anomaly",
+            ],
+            "Overlap (of 15)": [12, 13, 14],
+        }
+    )
     st.dataframe(overlap, use_container_width=True)
     st.caption(
         "Peer-adjusted ranking surfaces 3 of its top-15 assets that a raw overdue-"
@@ -428,8 +699,10 @@ elif page == "Peer-Adjusted Analysis":
 
 elif page == "Admin: User Management":
     st.title("Admin: User Management")
-    st.write("Accounts are provisioned here only. There is no self-registration: "
-             "every user of this system is added by the administrator.")
+    st.write(
+        "Accounts are provisioned here only. There is no self-registration: "
+        "every user of this system is added by the administrator."
+    )
 
     st.subheader("Existing users")
     users_df = list_users()
@@ -437,17 +710,29 @@ elif page == "Admin: User Management":
 
     st.subheader("Edit an existing user (change name, password, or role)")
     with st.form("edit_user"):
-        edit_username = st.selectbox("Select user to edit", users_df["username"].tolist())
+        edit_username = st.selectbox(
+            "Select user to edit", users_df["username"].tolist()
+        )
         edit_full_name = st.text_input("New full name (leave blank to keep unchanged)")
-        edit_password = st.text_input("New password (leave blank to keep unchanged)", type="password")
-        edit_role = st.selectbox("New role (leave as-is to keep unchanged)", ["(no change)", "engineer", "viewer", "admin"])
+        edit_password = st.text_input(
+            "New password (leave blank to keep unchanged)", type="password"
+        )
+        edit_role = st.selectbox(
+            "New role (leave as-is to keep unchanged)",
+            ["(no change)", "engineer", "viewer", "admin"],
+        )
         edit_submitted = st.form_submit_button("Save changes")
         if edit_submitted:
             role_to_set = None if edit_role == "(no change)" else edit_role
             if not edit_full_name and not edit_password and not role_to_set:
                 st.warning("Nothing was changed -- fill in at least one field above.")
             else:
-                update_user(edit_username, edit_full_name or None, edit_password or None, role_to_set)
+                update_user(
+                    edit_username,
+                    edit_full_name or None,
+                    edit_password or None,
+                    role_to_set,
+                )
                 st.success(f"Updated account for {edit_username}.")
                 st.cache_data.clear()
 
@@ -464,7 +749,9 @@ elif page == "Admin: User Management":
             else:
                 try:
                     create_user(new_username, new_password, new_full_name, new_role)
-                    st.success(f"Account created for {new_username}. Give them their username and temporary password directly.")
+                    st.success(
+                        f"Account created for {new_username}. Give them their username and temporary password directly."
+                    )
                     st.cache_data.clear()
                 except sqlite3.IntegrityError:
                     st.error("That username already exists.")
@@ -477,7 +764,9 @@ elif page == "System Information":
 
     st.subheader("Database tables")
     conn = get_connection()
-    tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)
+    tables = pd.read_sql_query(
+        "SELECT name FROM sqlite_master WHERE type='table'", conn
+    )
     for t in tables["name"]:
         count = pd.read_sql_query(f"SELECT COUNT(*) as n FROM {t}", conn).iloc[0]["n"]
         st.write(f"- **{t}**: {count:,} rows")
@@ -491,18 +780,25 @@ elif page == "System Information":
     - The sensor-detection track (AI4I 2020, Azure PdM) is shown separately under
       its own track selector, and is never merged with or compared numerically
       against this case-study track.
+    - New Machine Prediction gives a real, live inference from the trained model
+      for hand-entered inputs; it is not connected to a live IoT/sensor feed --
+      real-time sensor integration remains future work, as stated in the thesis.
     """)
 
 elif page == "Sensor Overview":
     st.title("Sensor-Detection Track: Overview")
-    st.warning("This track uses two public sensor datasets (AI4I 2020, Azure PdM). "
-               "It is kept strictly separate from the case-study track above -- "
-               "never merged, never compared numerically.")
+    st.warning(
+        "This track uses two public sensor datasets (AI4I 2020, Azure PdM). "
+        "It is kept strictly separate from the case-study track above -- "
+        "never merged, never compared numerically."
+    )
     col1, col2 = st.columns(2)
     col1.metric("AI4I 2020 records", "10,000")
     col2.metric("Azure PdM records (aggregated)", "36,600")
-    st.write("Use the pages on the left to see each dataset's real Component I, "
-             "Component II, and model-comparison results.")
+    st.write(
+        "Use the pages on the left to see each dataset's real Component I, "
+        "Component II, and model-comparison results."
+    )
 
 elif page == "Sensor Component I":
     st.title("Sensor-Detection Track: Component I (Statistical Analysis)")
@@ -510,8 +806,10 @@ elif page == "Sensor Component I":
     df = pd.read_sql_query("SELECT * FROM sensor_component1_results", conn)
     for ds in df.dataset_name.unique():
         st.subheader(ds)
-        st.dataframe(df[df.dataset_name == ds][["test_name", "statistic", "p_value", "finding"]],
-                     use_container_width=True)
+        st.dataframe(
+            df[df.dataset_name == ds][["test_name", "statistic", "p_value", "finding"]],
+            use_container_width=True,
+        )
 
 elif page == "Sensor Component II":
     st.title("Sensor-Detection Track: Component II (Pattern Discovery)")
@@ -519,8 +817,10 @@ elif page == "Sensor Component II":
     df = pd.read_sql_query("SELECT * FROM sensor_component2_results", conn)
     for ds in df.dataset_name.unique():
         st.subheader(ds)
-        st.dataframe(df[df.dataset_name == ds][["metric_name", "metric_value", "finding"]],
-                     use_container_width=True)
+        st.dataframe(
+            df[df.dataset_name == ds][["metric_name", "metric_value", "finding"]],
+            use_container_width=True,
+        )
     st.caption(
         "Note the ranking-comparison finding differs by dataset: the global anomaly "
         "detector underperforms a simple raw ranking on AI4I 2020, but outperforms it "
@@ -533,7 +833,9 @@ elif page == "Sensor Model Performance":
     df = pd.read_sql_query("SELECT * FROM sensor_model_results", conn)
     for ds in df.dataset_name.unique():
         st.subheader(ds)
-        sub = df[df.dataset_name == ds][["model_name", "pr_auc", "roc_auc", "f1", "recall", "precision_val"]]
+        sub = df[df.dataset_name == ds][
+            ["model_name", "pr_auc", "roc_auc", "f1", "recall", "precision_val"]
+        ]
         sub.columns = ["Model", "PR-AUC", "ROC-AUC", "F1", "Recall", "Precision"]
         st.dataframe(sub, use_container_width=True)
 
@@ -542,20 +844,46 @@ elif page == "Sensor Model Performance":
     col1.image("images/fig5_pr_ai4i-1.png", use_container_width=True)
     col2.image("images/fig5_roc_ai4i-1.png", use_container_width=True)
     col3, col4 = st.columns(2)
-    col3.image("images/fig5_9_cm_xgb_ai4i-1.png", caption="XGBoost confusion matrix", use_container_width=True)
-    col4.image("images/fig5_15_shap_ai4i-1.png", caption="XGBoost SHAP importance", use_container_width=True)
-    st.image("images/fig5_10_clusters_ai4i-1.png", caption="Component II cluster failure rates (k=4)", use_container_width=True)
+    col3.image(
+        "images/fig5_9_cm_xgb_ai4i-1.png",
+        caption="XGBoost confusion matrix",
+        use_container_width=True,
+    )
+    col4.image(
+        "images/fig5_15_shap_ai4i-1.png",
+        caption="XGBoost SHAP importance",
+        use_container_width=True,
+    )
+    st.image(
+        "images/fig5_10_clusters_ai4i-1.png",
+        caption="Component II cluster failure rates (k=4)",
+        use_container_width=True,
+    )
 
     st.subheader("Azure PdM -- Real Charts")
     col5, col6 = st.columns(2)
     col5.image("images/fig5_pr_azure-1.png", use_container_width=True)
     col6.image("images/fig5_roc_azure-1.png", use_container_width=True)
     col7, col8 = st.columns(2)
-    col7.image("images/fig5_11_cm_xgb_azure-1.png", caption="XGBoost confusion matrix", use_container_width=True)
-    col8.image("images/fig5_16_shap_azure-1.png", caption="XGBoost SHAP importance", use_container_width=True)
-    st.image("images/fig5_12_clusters_azure-1.png", caption="Component II cluster failure-day rates (k=5)", use_container_width=True)
+    col7.image(
+        "images/fig5_11_cm_xgb_azure-1.png",
+        caption="XGBoost confusion matrix",
+        use_container_width=True,
+    )
+    col8.image(
+        "images/fig5_16_shap_azure-1.png",
+        caption="XGBoost SHAP importance",
+        use_container_width=True,
+    )
+    st.image(
+        "images/fig5_12_clusters_azure-1.png",
+        caption="Component II cluster failure-day rates (k=5)",
+        use_container_width=True,
+    )
 
     st.subheader("Ranking Strategy: No Universal Winner (Real)")
     st.image("images/fig5_13_ranking_flip-1.png", use_container_width=True)
-    st.caption("The global anomaly detector underperforms a simple raw ranking on AI4I 2020, "
-               "but outperforms it on Azure PdM -- a genuine, dataset-dependent finding.")
+    st.caption(
+        "The global anomaly detector underperforms a simple raw ranking on AI4I 2020, "
+        "but outperforms it on Azure PdM -- a genuine, dataset-dependent finding."
+    )
