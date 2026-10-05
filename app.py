@@ -17,7 +17,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import shap
 import streamlit as st
 
@@ -70,7 +69,9 @@ def load_ai4i_model_bundle():
     return joblib.load("ai4i_model_bundle.joblib")
 
 
-def run_ai4i_live_prediction(air_temp, process_temp, rot_speed, torque, tool_wear, part_type):
+def run_ai4i_live_prediction(
+    air_temp, process_temp, rot_speed, torque, tool_wear, part_type
+):
     """Real, live inference on the actual trained AI4I 2020 XGBoost model.
     This is a genuine new calculation from hand-entered sensor readings --
     it is not connected to a live physical sensor feed; no such feed exists
@@ -204,9 +205,17 @@ def list_users():
     )
 
 
-def run_live_prediction(equipment_category, manufacturer, criticality,
-                         completed_pms, completed_wos, days_since_pm, days_since_wo,
-                         time_on_pms, time_on_wos):
+def run_live_prediction(
+    equipment_category,
+    manufacturer,
+    criticality,
+    completed_pms,
+    completed_wos,
+    days_since_pm,
+    days_since_wo,
+    time_on_pms,
+    time_on_wos,
+):
     """Real, live inference: builds a single-row feature vector exactly the
     way the real training pipeline did, scales it with the real saved
     scaler, and runs it through the real trained XGBoost model -- a genuine
@@ -364,6 +373,20 @@ preds = load_predictions_df()
 
 if page == "Dashboard":
     st.title("\u26cf EIPS-CMMS Dashboard")
+
+    now = datetime.now()
+    conn_ts = get_connection()
+    last_run = pd.read_sql_query(
+        "SELECT MAX(created_at) as t FROM predictions", conn_ts
+    ).iloc[0]["t"]
+    ts_col1, ts_col2 = st.columns(2)
+    ts_col1.caption(
+        f"\U0001f550 Current system time: **{now.strftime('%A, %d %B %Y -- %H:%M:%S')}**"
+    )
+    ts_col2.caption(
+        f"\U0001f4ca Last prediction run (real, from database): **{last_run}**"
+    )
+
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Machines tracked", f"{len(preds):,}")
     col2.metric("High Risk", f"{(preds.intervention_priority == 'High Risk').sum():,}")
@@ -373,8 +396,62 @@ if page == "Dashboard":
     col4.metric("Active model", active["model_name"])
 
     st.subheader("Intervention priority distribution")
-    dist = preds["intervention_priority"].value_counts()
-    st.bar_chart(dist)
+    dist = preds["intervention_priority"].value_counts().reset_index()
+    dist.columns = ["Priority", "Count"]
+    color_map = {"Normal": "#2ECC71", "Watch": "#F39C12", "High Risk": "#E74C3C"}
+
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        fig_pie = px.pie(
+            dist,
+            names="Priority",
+            values="Count",
+            color="Priority",
+            color_discrete_map=color_map,
+            hole=0.4,
+            title="Priority Distribution (Real Data)",
+        )
+        fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
+        st.plotly_chart(fig_pie, use_container_width=True)
+    with chart_col2:
+        fig_bar = px.bar(
+            dist,
+            x="Priority",
+            y="Count",
+            color="Priority",
+            color_discrete_map=color_map,
+            title="Priority Counts (Real Data)",
+        )
+        fig_bar.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#E8EEF5",
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    st.subheader("Failure probability distribution across all machines (real)")
+    fig_hist = px.histogram(
+        preds,
+        x="failure_probability",
+        nbins=40,
+        title=f"Failure Probability Histogram ({len(preds):,} real machines)",
+        color_discrete_sequence=["#D97B29"],
+    )
+    fig_hist.add_vline(
+        x=0.5,
+        line_dash="dash",
+        line_color="#E74C3C",
+        annotation_text="High Risk threshold",
+    )
+    fig_hist.add_vline(
+        x=0.2, line_dash="dash", line_color="#F39C12", annotation_text="Watch threshold"
+    )
+    fig_hist.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#E8EEF5",
+    )
+    st.plotly_chart(fig_hist, use_container_width=True)
 
     st.subheader("Highest-priority machines")
     high_risk_table = preds[preds.intervention_priority == "High Risk"][
@@ -518,39 +595,80 @@ elif page == "New Machine Prediction":
         col1, col2 = st.columns(2)
         equipment_category = col1.selectbox(
             "Equipment Category",
-            ["MCC", "MOTOR", "LAUNDER", "E STOP", "PUMP", "VALVE",
-             "MANUAL VALVE", "CONVEYOR", "GEARBOX", "Unknown"],
+            [
+                "MCC",
+                "MOTOR",
+                "LAUNDER",
+                "E STOP",
+                "PUMP",
+                "VALVE",
+                "MANUAL VALVE",
+                "CONVEYOR",
+                "GEARBOX",
+                "Unknown",
+            ],
         )
         manufacturer = col2.selectbox(
             "Manufacturer",
-            ["K-AND-S-ELECTRICAL-AUTOMATION", "WEG", "ELECTRIC-CONTROL-PRODUCT",
-             "CMO-GL-Series", "ABB", "BRELKO", "OUTOTEC", "COMPAIR",
-             "BUCCANEER", "Unknown"],
+            [
+                "K-AND-S-ELECTRICAL-AUTOMATION",
+                "WEG",
+                "ELECTRIC-CONTROL-PRODUCT",
+                "CMO-GL-Series",
+                "ABB",
+                "BRELKO",
+                "OUTOTEC",
+                "COMPAIR",
+                "BUCCANEER",
+                "Unknown",
+            ],
         )
         criticality = st.selectbox(
             "Criticality Classification",
-            ["C1 - High Criticality Equipment", "C2 - Medium Criticality Equipment",
-             "C3 - Low Criticality Equipment", "Unknown"],
+            [
+                "C1 - High Criticality Equipment",
+                "C2 - Medium Criticality Equipment",
+                "C3 - Low Criticality Equipment",
+                "Unknown",
+            ],
         )
         col3, col4 = st.columns(2)
         completed_pms = col3.number_input("Total Completed PMs", min_value=0, value=10)
         completed_wos = col4.number_input("Total Completed WOs", min_value=0, value=5)
         col5, col6 = st.columns(2)
-        days_since_pm = col5.number_input("Days Since Last Completed PM", min_value=0, value=30)
-        days_since_wo = col6.number_input("Days Since Last Completed WO", min_value=0, value=30)
+        days_since_pm = col5.number_input(
+            "Days Since Last Completed PM", min_value=0, value=30
+        )
+        days_since_wo = col6.number_input(
+            "Days Since Last Completed WO", min_value=0, value=30
+        )
         col7, col8 = st.columns(2)
-        time_on_pms = col7.number_input("Total Time Spent on PMs (minutes)", min_value=0, value=120)
-        time_on_wos = col8.number_input("Total Time Spent on WOs (minutes)", min_value=0, value=60)
+        time_on_pms = col7.number_input(
+            "Total Time Spent on PMs (minutes)", min_value=0, value=120
+        )
+        time_on_wos = col8.number_input(
+            "Total Time Spent on WOs (minutes)", min_value=0, value=60
+        )
 
-        predict_submitted = st.form_submit_button("Run Live Prediction", use_container_width=True)
+        predict_submitted = st.form_submit_button(
+            "Run Live Prediction", use_container_width=True
+        )
 
     if predict_submitted:
         proba, top_factors = run_live_prediction(
-            equipment_category, manufacturer, criticality,
-            completed_pms, completed_wos, days_since_pm, days_since_wo,
-            time_on_pms, time_on_wos,
+            equipment_category,
+            manufacturer,
+            criticality,
+            completed_pms,
+            completed_wos,
+            days_since_pm,
+            days_since_wo,
+            time_on_pms,
+            time_on_wos,
         )
-        priority = "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
+        priority = (
+            "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
+        )
 
         st.success("Live prediction computed.")
         c1, c2 = st.columns(2)
@@ -587,7 +705,9 @@ elif page == "Upload Dataset (Batch Prediction)":
         else:
             uploaded_df = pd.read_excel(uploaded_file)
 
-        st.write(f"File loaded: {len(uploaded_df):,} rows, {len(uploaded_df.columns)} columns")
+        st.write(
+            f"File loaded: {len(uploaded_df):,} rows, {len(uploaded_df.columns)} columns"
+        )
         st.dataframe(uploaded_df.head(10), use_container_width=True)
 
         if st.button("Run Batch Prediction on This File", use_container_width=True):
@@ -601,7 +721,11 @@ elif page == "Upload Dataset (Batch Prediction)":
             X = pd.DataFrame(0, index=range(n), columns=feature_columns)
             for col in num_cols:
                 if col in uploaded_df.columns:
-                    X[col] = pd.to_numeric(uploaded_df[col], errors="coerce").fillna(0).values
+                    X[col] = (
+                        pd.to_numeric(uploaded_df[col], errors="coerce")
+                        .fillna(0)
+                        .values
+                    )
 
             for idx in range(n):
                 if "Equipment Category" in uploaded_df.columns:
@@ -865,7 +989,9 @@ elif page == "Admin: User Management":
 
 elif page == "Analytics Dashboard":
     st.title("Analytics Dashboard")
-    st.write("Real, interactive visualizations built directly from the live database -- no external BI tool.")
+    st.write(
+        "Real, interactive visualizations built directly from the live database -- no external BI tool."
+    )
 
     chart_colors = {"Normal": "#2A9D5C", "Watch": "#D97B29", "High Risk": "#D33B3B"}
 
@@ -875,8 +1001,12 @@ elif page == "Analytics Dashboard":
         dist = preds["intervention_priority"].value_counts().reset_index()
         dist.columns = ["Priority", "Count"]
         fig_pie = px.pie(
-            dist, names="Priority", values="Count",
-            color="Priority", color_discrete_map=chart_colors, hole=0.4,
+            dist,
+            names="Priority",
+            values="Count",
+            color="Priority",
+            color_discrete_map=chart_colors,
+            hole=0.4,
         )
         fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
         st.plotly_chart(fig_pie, use_container_width=True)
@@ -884,31 +1014,45 @@ elif page == "Analytics Dashboard":
     with col2:
         st.subheader("Failure Probability Distribution (All 4,024 Machines)")
         fig_hist = px.histogram(
-            preds, x="failure_probability", nbins=40,
+            preds,
+            x="failure_probability",
+            nbins=40,
             color_discrete_sequence=["#D97B29"],
         )
         fig_hist.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EEF5", xaxis_title="Failure Probability", yaxis_title="Number of Machines",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#E8EEF5",
+            xaxis_title="Failure Probability",
+            yaxis_title="Number of Machines",
         )
         st.plotly_chart(fig_hist, use_container_width=True)
 
     st.subheader("High Risk Count by Equipment Category (Top 15)")
     high_risk_by_cat = (
         preds[preds.intervention_priority == "High Risk"]["equipment_category"]
-        .value_counts().head(15).reset_index()
+        .value_counts()
+        .head(15)
+        .reset_index()
     )
     high_risk_by_cat.columns = ["Equipment Category", "High Risk Count"]
     fig_bar = px.bar(
-        high_risk_by_cat, x="Equipment Category", y="High Risk Count",
-        color="High Risk Count", color_continuous_scale="Oranges",
+        high_risk_by_cat,
+        x="Equipment Category",
+        y="High Risk Count",
+        color="High Risk Count",
+        color_continuous_scale="Oranges",
     )
     fig_bar.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#E8EEF5",
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    st.subheader("Real Time-Series: Azure PdM Daily Failure Counts (Full Real Year, 2015)")
+    st.subheader(
+        "Real Time-Series: Azure PdM Daily Failure Counts (Full Real Year, 2015)"
+    )
     st.caption(
         "This is real, genuine date-stamped data from the Azure PdM sensor dataset -- "
         "366 real days, 100 real machines. Shown here to demonstrate true time-series "
@@ -916,12 +1060,17 @@ elif page == "Analytics Dashboard":
     )
     daily = load_azure_daily()
     fig_line = px.area(
-        daily, x="date", y="failure_count",
+        daily,
+        x="date",
+        y="failure_count",
         color_discrete_sequence=["#D97B29"],
     )
     fig_line.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5",
-        xaxis_title="Date", yaxis_title="Real Failure-Days (across 100 machines)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#E8EEF5",
+        xaxis_title="Date",
+        yaxis_title="Real Failure-Days (across 100 machines)",
     )
     st.plotly_chart(fig_line, use_container_width=True)
 
@@ -983,7 +1132,9 @@ elif page == "New Sensor Reading Prediction":
     with st.form("sensor_prediction_form"):
         col1, col2 = st.columns(2)
         air_temp = col1.number_input("Air Temperature (K)", value=300.0, step=0.1)
-        process_temp = col2.number_input("Process Temperature (K)", value=310.0, step=0.1)
+        process_temp = col2.number_input(
+            "Process Temperature (K)", value=310.0, step=0.1
+        )
         col3, col4 = st.columns(2)
         rot_speed = col3.number_input("Rotational Speed (rpm)", value=1500, step=10)
         torque = col4.number_input("Torque (Nm)", value=40.0, step=0.5)
@@ -991,7 +1142,9 @@ elif page == "New Sensor Reading Prediction":
         tool_wear = col5.number_input("Tool Wear (min)", value=50, step=1)
         part_type = col6.selectbox("Part Quality Type", ["H", "M", "L"])
 
-        sensor_submitted = st.form_submit_button("Run Live Sensor Prediction", use_container_width=True)
+        sensor_submitted = st.form_submit_button(
+            "Run Live Sensor Prediction", use_container_width=True
+        )
 
     if sensor_submitted:
         proba, top_factors = run_ai4i_live_prediction(
