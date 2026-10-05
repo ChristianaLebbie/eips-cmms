@@ -17,6 +17,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import shap
 import streamlit as st
 
@@ -27,6 +28,12 @@ st.set_page_config(page_title="EIPS-CMMS", layout="wide", page_icon="\u26cf")
 st.markdown(
     """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
 .stApp {
     background: linear-gradient(180deg, #0F2340 0%, #16324F 100%);
 }
@@ -35,23 +42,113 @@ st.markdown(
     border-right: 2px solid #D97B29;
 }
 [data-testid="stSidebar"] * { color: #E8EEF5 !important; }
-h1, h2, h3 { color: #F4F7FA !important; }
+h1, h2, h3 { color: #F4F7FA !important; font-weight: 700 !important; }
 p, label, span, div { color: #DCE4EC; }
-[data-testid="stMetricValue"] { color: #D97B29 !important; }
-[data-testid="stMetricLabel"] { color: #AEBFD1 !important; }
-.stButton>button {
-    background-color: #D97B29; color: white; border: none; font-weight: 600;
+
+/* Metric cards: rounded, top accent stripe, soft shadow, slight lift on hover */
+div[data-testid="stMetric"] {
+    background: #16324F;
+    border: 1px solid rgba(217,123,41,0.25);
+    border-top: 3px solid #D97B29;
+    border-radius: 12px;
+    padding: 1rem 1.1rem 0.85rem 1.1rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    transition: transform 0.08s ease-in-out, box-shadow 0.08s ease-in-out;
 }
-.stButton>button:hover { background-color: #B8631E; }
-div[data-testid="stDataFrame"] { background-color: #16324F; }
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgba(217,123,41,0.25);
+}
+[data-testid="stMetricValue"] { color: #D97B29 !important; font-weight: 800 !important; }
+[data-testid="stMetricLabel"] { color: #AEBFD1 !important; font-weight: 600 !important; }
+
+.stButton>button, .stDownloadButton>button, .stFormSubmitButton>button {
+    background-color: #D97B29; color: white; border: none; font-weight: 600;
+    border-radius: 8px; transition: transform 0.06s ease-in-out, box-shadow 0.06s ease-in-out;
+}
+.stButton>button:hover, .stDownloadButton>button:hover, .stFormSubmitButton>button:hover {
+    background-color: #B8631E; box-shadow: 0 2px 10px rgba(217,123,41,0.35);
+    transform: translateY(-1px);
+}
+
+/* Tabs: clearer active underline in brand orange */
+.stTabs [aria-selected="true"] { color: #D97B29 !important; font-weight: 700; }
+
+/* Dataframes: rounded corners, subtle border, no hard edges */
+div[data-testid="stDataFrame"] {
+    background-color: #16324F;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(217,123,41,0.15);
+}
+
+/* Alert/info/warning boxes: rounded, consistent with the rest of the UI */
+div[data-testid="stAlert"] { border-radius: 10px; }
+
+/* Expanders: rounded, light border */
+div[data-testid="stExpander"] { border-radius: 10px; border: 1px solid rgba(217,123,41,0.15); }
+
 .login-card {
     background: #16324F; padding: 2.4rem; border-radius: 10px;
     border: 1px solid #2A4A6E; max-width: 420px; margin: 3rem auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
+
+/* Page header banner: icon-led, consistent across every page */
+.eips-page-banner {
+    display: flex; align-items: center; gap: 0.85rem;
+    padding: 1.1rem 1.5rem; margin-bottom: 1.25rem;
+    border-radius: 14px;
+    background: linear-gradient(120deg, rgba(217,123,41,0.12) 0%, rgba(217,123,41,0.00) 75%);
+    border: 1px solid rgba(217,123,41,0.25);
+}
+.eips-page-banner .eips-banner-icon { font-size: 2.1rem; line-height: 1; }
+.eips-page-banner .eips-banner-text h1 {
+    font-size: 1.55rem !important; font-weight: 700 !important;
+    color: #F4F7FA !important; margin: 0 !important; padding: 0 !important; line-height: 1.25;
+}
+.eips-page-banner .eips-banner-text p {
+    font-size: 0.92rem; color: #AEBFD1; margin: 0.15rem 0 0 0; line-height: 1.4;
+}
+
+/* Priority badges: small, colored, rounded pills */
+.priority-badge {
+    display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px;
+    font-weight: 700; font-size: 0.85rem;
+}
+.priority-high { background: rgba(231,76,60,0.18); color: #E74C3C; border: 1px solid #E74C3C; }
+.priority-watch { background: rgba(243,156,18,0.18); color: #F39C12; border: 1px solid #F39C12; }
+.priority-normal { background: rgba(46,204,113,0.18); color: #2ECC71; border: 1px solid #2ECC71; }
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+
+def render_page_header(title, icon, subtitle=None):
+    """Icon-led header banner, used in place of a bare st.title() so every
+    page reads as one consistent, designed system rather than plain
+    default Streamlit headings."""
+    subtitle_html = f"<p>{subtitle}</p>" if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="eips-page-banner">
+            <div class="eips-banner-icon">{icon}</div>
+            <div class="eips-banner-text">
+                <h1>{title}</h1>
+                {subtitle_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def priority_badge(priority):
+    """Returns an HTML snippet rendering a colored pill for a priority
+    level, for use with st.markdown(..., unsafe_allow_html=True)."""
+    cls = {"High Risk": "priority-high", "Watch": "priority-watch", "Normal": "priority-normal"}.get(priority, "priority-normal")
+    return f'<span class="priority-badge {cls}">{priority}</span>'
 
 
 @st.cache_resource
@@ -69,9 +166,7 @@ def load_ai4i_model_bundle():
     return joblib.load("ai4i_model_bundle.joblib")
 
 
-def run_ai4i_live_prediction(
-    air_temp, process_temp, rot_speed, torque, tool_wear, part_type
-):
+def run_ai4i_live_prediction(air_temp, process_temp, rot_speed, torque, tool_wear, part_type):
     """Real, live inference on the actual trained AI4I 2020 XGBoost model.
     This is a genuine new calculation from hand-entered sensor readings --
     it is not connected to a live physical sensor feed; no such feed exists
@@ -148,10 +243,7 @@ def load_model_versions():
 
 @st.cache_data
 def load_azure_daily():
-    daily = pd.read_csv("azure_daily.csv")
-    daily_counts = daily.groupby("date")["label"].sum().reset_index()
-    daily_counts.columns = ["date", "failure_count"]
-    return daily_counts
+    return pd.read_csv("azure_daily_lean.csv")
 
 
 @st.cache_data
@@ -205,17 +297,9 @@ def list_users():
     )
 
 
-def run_live_prediction(
-    equipment_category,
-    manufacturer,
-    criticality,
-    completed_pms,
-    completed_wos,
-    days_since_pm,
-    days_since_wo,
-    time_on_pms,
-    time_on_wos,
-):
+def run_live_prediction(equipment_category, manufacturer, criticality,
+                         completed_pms, completed_wos, days_since_pm, days_since_wo,
+                         time_on_pms, time_on_wos):
     """Real, live inference: builds a single-row feature vector exactly the
     way the real training pipeline did, scales it with the real saved
     scaler, and runs it through the real trained XGBoost model -- a genuine
@@ -372,20 +456,14 @@ st.sidebar.caption(
 preds = load_predictions_df()
 
 if page == "Dashboard":
-    st.title("\u26cf EIPS-CMMS Dashboard")
+    render_page_header("EIPS-CMMS Dashboard", "\u26cf", "Live overview of the real, 4,024-asset case-study population")
 
     now = datetime.now()
     conn_ts = get_connection()
-    last_run = pd.read_sql_query(
-        "SELECT MAX(created_at) as t FROM predictions", conn_ts
-    ).iloc[0]["t"]
+    last_run = pd.read_sql_query("SELECT MAX(created_at) as t FROM predictions", conn_ts).iloc[0]["t"]
     ts_col1, ts_col2 = st.columns(2)
-    ts_col1.caption(
-        f"\U0001f550 Current system time: **{now.strftime('%A, %d %B %Y -- %H:%M:%S')}**"
-    )
-    ts_col2.caption(
-        f"\U0001f4ca Last prediction run (real, from database): **{last_run}**"
-    )
+    ts_col1.caption(f"\U0001F550 Current system time: **{now.strftime('%A, %d %B %Y -- %H:%M:%S')}**")
+    ts_col2.caption(f"\U0001F4CA Last prediction run (real, from database): **{last_run}**")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Machines tracked", f"{len(preds):,}")
@@ -403,54 +481,30 @@ if page == "Dashboard":
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
         fig_pie = px.pie(
-            dist,
-            names="Priority",
-            values="Count",
-            color="Priority",
-            color_discrete_map=color_map,
-            hole=0.4,
+            dist, names="Priority", values="Count", color="Priority",
+            color_discrete_map=color_map, hole=0.4,
             title="Priority Distribution (Real Data)",
         )
         fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
         st.plotly_chart(fig_pie, use_container_width=True)
     with chart_col2:
         fig_bar = px.bar(
-            dist,
-            x="Priority",
-            y="Count",
-            color="Priority",
+            dist, x="Priority", y="Count", color="Priority",
             color_discrete_map=color_map,
             title="Priority Counts (Real Data)",
         )
-        fig_bar.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EEF5",
-        )
+        fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
         st.plotly_chart(fig_bar, use_container_width=True)
 
     st.subheader("Failure probability distribution across all machines (real)")
     fig_hist = px.histogram(
-        preds,
-        x="failure_probability",
-        nbins=40,
+        preds, x="failure_probability", nbins=40,
         title=f"Failure Probability Histogram ({len(preds):,} real machines)",
         color_discrete_sequence=["#D97B29"],
     )
-    fig_hist.add_vline(
-        x=0.5,
-        line_dash="dash",
-        line_color="#E74C3C",
-        annotation_text="High Risk threshold",
-    )
-    fig_hist.add_vline(
-        x=0.2, line_dash="dash", line_color="#F39C12", annotation_text="Watch threshold"
-    )
-    fig_hist.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#E8EEF5",
-    )
+    fig_hist.add_vline(x=0.5, line_dash="dash", line_color="#E74C3C", annotation_text="High Risk threshold")
+    fig_hist.add_vline(x=0.2, line_dash="dash", line_color="#F39C12", annotation_text="Watch threshold")
+    fig_hist.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
     st.plotly_chart(fig_hist, use_container_width=True)
 
     st.subheader("Highest-priority machines")
@@ -466,7 +520,7 @@ if page == "Dashboard":
     )
 
 elif page == "Asset Register":
-    st.title("Asset Register")
+    render_page_header("Asset Register", "\U0001F4CB", "The real, complete CMMS asset register")
     ar = load_asset_register()
     st.write(f"{len(ar):,} real registered assets")
 
@@ -506,7 +560,7 @@ elif page == "Asset Register":
     )
 
 elif page == "Work Orders":
-    st.title("Work Orders")
+    render_page_header("Work Orders", "\U0001F527", "Real work order records")
     wo = load_work_orders()
     st.write(f"{len(wo):,} real work order records")
 
@@ -535,7 +589,7 @@ elif page == "Work Orders":
     st.bar_chart(wo["WorkType"].value_counts())
 
 elif page == "PM / Task History":
-    st.title("PM / Task History")
+    render_page_header("PM / Task History", "\U0001F5D3\uFE0F", "Real preventive-maintenance task history")
     th = load_task_history()
     st.write(f"{len(th):,} real task-history records")
 
@@ -564,7 +618,7 @@ elif page == "PM / Task History":
         st.bar_chart(nonzero["Downtime in Minutes"].head(50).reset_index(drop=True))
 
 elif page == "Run Prediction":
-    st.title("Run Prediction")
+    render_page_header("Run Prediction", "\U0001F3AF", "View an existing, already-computed real prediction")
     st.write(
         "Select a machine to view its real, already-computed prediction "
         "from the active model (XGBoost)."
@@ -574,7 +628,9 @@ elif page == "Run Prediction":
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Failure probability", f"{row.failure_probability:.3f}")
-    c2.metric("Intervention priority", row.intervention_priority)
+    with c2:
+        st.caption("Intervention priority")
+        st.markdown(priority_badge(row.intervention_priority), unsafe_allow_html=True)
     c3.metric("Criticality", row.criticality)
 
     st.caption(
@@ -584,96 +640,56 @@ elif page == "Run Prediction":
     )
 
 elif page == "New Machine Prediction":
-    st.title("New Machine Prediction (Live Inference)")
+    render_page_header("New Machine Prediction", "\u26A1", "Live Inference -- a genuine new prediction from the real trained model")
     st.write(
         "Enter a machine's real attributes below to get a genuine, live "
         "prediction from the actual trained XGBoost model -- computed fresh "
         "right now, not looked up from a stored result."
     )
 
+    real_asset_data = load_asset_register()
+    all_categories = sorted(real_asset_data["Equipment Category"].dropna().unique().tolist())
+    all_manufacturers = sorted(real_asset_data["Manufacturer"].dropna().unique().tolist())
+
     with st.form("new_machine_form"):
         col1, col2 = st.columns(2)
         equipment_category = col1.selectbox(
-            "Equipment Category",
-            [
-                "MCC",
-                "MOTOR",
-                "LAUNDER",
-                "E STOP",
-                "PUMP",
-                "VALVE",
-                "MANUAL VALVE",
-                "CONVEYOR",
-                "GEARBOX",
-                "Unknown",
-            ],
+            f"Equipment Category ({len(all_categories)} real options)", all_categories,
         )
         manufacturer = col2.selectbox(
-            "Manufacturer",
-            [
-                "K-AND-S-ELECTRICAL-AUTOMATION",
-                "WEG",
-                "ELECTRIC-CONTROL-PRODUCT",
-                "CMO-GL-Series",
-                "ABB",
-                "BRELKO",
-                "OUTOTEC",
-                "COMPAIR",
-                "BUCCANEER",
-                "Unknown",
-            ],
+            f"Manufacturer ({len(all_manufacturers)} real options)", all_manufacturers,
         )
         criticality = st.selectbox(
             "Criticality Classification",
-            [
-                "C1 - High Criticality Equipment",
-                "C2 - Medium Criticality Equipment",
-                "C3 - Low Criticality Equipment",
-                "Unknown",
-            ],
+            ["C1 - High Criticality Equipment", "C2 - Medium Criticality Equipment",
+             "C3 - Low Criticality Equipment", "Unknown"],
         )
         col3, col4 = st.columns(2)
         completed_pms = col3.number_input("Total Completed PMs", min_value=0, value=10)
         completed_wos = col4.number_input("Total Completed WOs", min_value=0, value=5)
         col5, col6 = st.columns(2)
-        days_since_pm = col5.number_input(
-            "Days Since Last Completed PM", min_value=0, value=30
-        )
-        days_since_wo = col6.number_input(
-            "Days Since Last Completed WO", min_value=0, value=30
-        )
+        days_since_pm = col5.number_input("Days Since Last Completed PM", min_value=0, value=30)
+        days_since_wo = col6.number_input("Days Since Last Completed WO", min_value=0, value=30)
         col7, col8 = st.columns(2)
-        time_on_pms = col7.number_input(
-            "Total Time Spent on PMs (minutes)", min_value=0, value=120
-        )
-        time_on_wos = col8.number_input(
-            "Total Time Spent on WOs (minutes)", min_value=0, value=60
-        )
+        time_on_pms = col7.number_input("Total Time Spent on PMs (minutes)", min_value=0, value=120)
+        time_on_wos = col8.number_input("Total Time Spent on WOs (minutes)", min_value=0, value=60)
 
-        predict_submitted = st.form_submit_button(
-            "Run Live Prediction", use_container_width=True
-        )
+        predict_submitted = st.form_submit_button("Run Live Prediction", use_container_width=True)
 
     if predict_submitted:
         proba, top_factors = run_live_prediction(
-            equipment_category,
-            manufacturer,
-            criticality,
-            completed_pms,
-            completed_wos,
-            days_since_pm,
-            days_since_wo,
-            time_on_pms,
-            time_on_wos,
+            equipment_category, manufacturer, criticality,
+            completed_pms, completed_wos, days_since_pm, days_since_wo,
+            time_on_pms, time_on_wos,
         )
-        priority = (
-            "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
-        )
+        priority = "High Risk" if proba >= 0.5 else ("Watch" if proba >= 0.2 else "Normal")
 
         st.success("Live prediction computed.")
         c1, c2 = st.columns(2)
         c1.metric("Failure probability", f"{proba:.3f}")
-        c2.metric("Intervention priority", priority)
+        with c2:
+            st.caption("Intervention priority")
+            st.markdown(priority_badge(priority), unsafe_allow_html=True)
 
         st.subheader("Top factors driving this specific prediction (real SHAP values)")
         factors_df = pd.DataFrame(top_factors, columns=["Feature", "SHAP value"])
@@ -685,7 +701,7 @@ elif page == "New Machine Prediction":
         )
 
 elif page == "Upload Dataset (Batch Prediction)":
-    st.title("Upload Dataset (Batch Prediction)")
+    render_page_header("Upload Dataset", "\U0001F4C2", "Batch Prediction -- real, live inference across an uploaded file")
     st.write(
         "Upload a CSV or Excel file of machines to get real, live predictions "
         "for every row from the actual trained XGBoost model. The file should "
@@ -705,9 +721,7 @@ elif page == "Upload Dataset (Batch Prediction)":
         else:
             uploaded_df = pd.read_excel(uploaded_file)
 
-        st.write(
-            f"File loaded: {len(uploaded_df):,} rows, {len(uploaded_df.columns)} columns"
-        )
+        st.write(f"File loaded: {len(uploaded_df):,} rows, {len(uploaded_df.columns)} columns")
         st.dataframe(uploaded_df.head(10), use_container_width=True)
 
         if st.button("Run Batch Prediction on This File", use_container_width=True):
@@ -721,11 +735,7 @@ elif page == "Upload Dataset (Batch Prediction)":
             X = pd.DataFrame(0, index=range(n), columns=feature_columns)
             for col in num_cols:
                 if col in uploaded_df.columns:
-                    X[col] = (
-                        pd.to_numeric(uploaded_df[col], errors="coerce")
-                        .fillna(0)
-                        .values
-                    )
+                    X[col] = pd.to_numeric(uploaded_df[col], errors="coerce").fillna(0).values
 
             for idx in range(n):
                 if "Equipment Category" in uploaded_df.columns:
@@ -770,7 +780,7 @@ elif page == "Upload Dataset (Batch Prediction)":
             )
 
 elif page == "Explainability":
-    st.title("Explainability (SHAP)")
+    render_page_header("Explainability", "\U0001F50D", "Real SHAP explanations for individual predictions")
     machine_id = st.selectbox(
         "Machine", preds["machine_id"].tolist(), key="explain_machine"
     )
@@ -805,7 +815,7 @@ elif page == "Explainability":
     )
 
 elif page == "Alerts":
-    st.title("Alerts")
+    render_page_header("Alerts", "\U0001F6A8", "Real alerts generated from High Risk predictions")
     alerts = load_alerts_df()
     status_filter = st.selectbox("Status", ["open", "all"])
     if status_filter == "open":
@@ -820,7 +830,7 @@ elif page == "Alerts":
     )
 
 elif page == "Prediction History":
-    st.title("Prediction History")
+    render_page_header("Prediction History", "\U0001F4C8", "Real record of every prediction run")
     conn = get_connection()
     history = pd.read_sql_query(
         "SELECT mv.model_name, mv.version, p.created_at, COUNT(*) as n_predictions "
@@ -836,7 +846,7 @@ elif page == "Prediction History":
     )
 
 elif page == "Model Performance":
-    st.title("Model Performance")
+    render_page_header("Model Performance", "\U0001F4CA", "Real, independently-verified results across all three candidate models")
     st.write("Real, independently-verified results across all three candidate models:")
 
     perf = pd.DataFrame(
@@ -896,7 +906,7 @@ elif page == "Model Performance":
     )
 
 elif page == "Peer-Adjusted Analysis":
-    st.title("Peer-Adjusted Analysis (Component II)")
+    render_page_header("Peer-Adjusted Analysis", "\U0001F500", "Component II -- real unsupervised pattern-discovery results")
     st.write(
         "Real results from the unsupervised pattern-discovery stage, run on "
         "the 2,245-asset clustering-eligible population (14 equipment categories "
@@ -929,7 +939,7 @@ elif page == "Peer-Adjusted Analysis":
     st.image("images/fig5_6_clusters_casestudy-1.png", use_container_width=True)
 
 elif page == "Admin: User Management":
-    st.title("Admin: User Management")
+    render_page_header("Admin: User Management", "\U0001F510", "Accounts are provisioned here only -- no self-registration")
     st.write(
         "Accounts are provisioned here only. There is no self-registration: "
         "every user of this system is added by the administrator."
@@ -988,10 +998,8 @@ elif page == "Admin: User Management":
                     st.error("That username already exists.")
 
 elif page == "Analytics Dashboard":
-    st.title("Analytics Dashboard")
-    st.write(
-        "Real, interactive visualizations built directly from the live database -- no external BI tool."
-    )
+    render_page_header("Analytics Dashboard", "\U0001F4C9", "Real, interactive visualizations built directly from the live database")
+    st.write("Real, interactive visualizations built directly from the live database -- no external BI tool.")
 
     chart_colors = {"Normal": "#2A9D5C", "Watch": "#D97B29", "High Risk": "#D33B3B"}
 
@@ -1001,12 +1009,8 @@ elif page == "Analytics Dashboard":
         dist = preds["intervention_priority"].value_counts().reset_index()
         dist.columns = ["Priority", "Count"]
         fig_pie = px.pie(
-            dist,
-            names="Priority",
-            values="Count",
-            color="Priority",
-            color_discrete_map=chart_colors,
-            hole=0.4,
+            dist, names="Priority", values="Count",
+            color="Priority", color_discrete_map=chart_colors, hole=0.4,
         )
         fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5")
         st.plotly_chart(fig_pie, use_container_width=True)
@@ -1014,45 +1018,31 @@ elif page == "Analytics Dashboard":
     with col2:
         st.subheader("Failure Probability Distribution (All 4,024 Machines)")
         fig_hist = px.histogram(
-            preds,
-            x="failure_probability",
-            nbins=40,
+            preds, x="failure_probability", nbins=40,
             color_discrete_sequence=["#D97B29"],
         )
         fig_hist.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EEF5",
-            xaxis_title="Failure Probability",
-            yaxis_title="Number of Machines",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#E8EEF5", xaxis_title="Failure Probability", yaxis_title="Number of Machines",
         )
         st.plotly_chart(fig_hist, use_container_width=True)
 
     st.subheader("High Risk Count by Equipment Category (Top 15)")
     high_risk_by_cat = (
         preds[preds.intervention_priority == "High Risk"]["equipment_category"]
-        .value_counts()
-        .head(15)
-        .reset_index()
+        .value_counts().head(15).reset_index()
     )
     high_risk_by_cat.columns = ["Equipment Category", "High Risk Count"]
     fig_bar = px.bar(
-        high_risk_by_cat,
-        x="Equipment Category",
-        y="High Risk Count",
-        color="High Risk Count",
-        color_continuous_scale="Oranges",
+        high_risk_by_cat, x="Equipment Category", y="High Risk Count",
+        color="High Risk Count", color_continuous_scale="Oranges",
     )
     fig_bar.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#E8EEF5",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5",
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    st.subheader(
-        "Real Time-Series: Azure PdM Daily Failure Counts (Full Real Year, 2015)"
-    )
+    st.subheader("Real Time-Series: Azure PdM Daily Failure Counts (Full Real Year, 2015)")
     st.caption(
         "This is real, genuine date-stamped data from the Azure PdM sensor dataset -- "
         "366 real days, 100 real machines. Shown here to demonstrate true time-series "
@@ -1060,22 +1050,17 @@ elif page == "Analytics Dashboard":
     )
     daily = load_azure_daily()
     fig_line = px.area(
-        daily,
-        x="date",
-        y="failure_count",
+        daily, x="date", y="failure_count",
         color_discrete_sequence=["#D97B29"],
     )
     fig_line.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#E8EEF5",
-        xaxis_title="Date",
-        yaxis_title="Real Failure-Days (across 100 machines)",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5",
+        xaxis_title="Date", yaxis_title="Real Failure-Days (across 100 machines)",
     )
     st.plotly_chart(fig_line, use_container_width=True)
 
 elif page == "System Information":
-    st.title("System Information")
+    render_page_header("System Information", "\u2699\uFE0F", "Model versions, database contents, and known limitations")
     mv = load_model_versions()
     st.subheader("Model versions")
     st.dataframe(mv, use_container_width=True)
@@ -1104,7 +1089,7 @@ elif page == "System Information":
     """)
 
 elif page == "Sensor Overview":
-    st.title("Sensor-Detection Track: Overview")
+    render_page_header("Sensor-Detection Track", "\U0001F4E1", "Overview of the AI4I 2020 and Azure PdM datasets")
     st.warning(
         "This track uses two public sensor datasets (AI4I 2020, Azure PdM). "
         "It is kept strictly separate from the case-study track above -- "
@@ -1119,7 +1104,7 @@ elif page == "Sensor Overview":
     )
 
 elif page == "New Sensor Reading Prediction":
-    st.title("New Sensor Reading Prediction (Live Inference)")
+    render_page_header("New Sensor Reading Prediction", "\u26A1", "Live Inference from the real trained AI4I 2020 model")
     st.warning(
         "Honest note: this is a genuine, live prediction from the actual trained "
         "AI4I 2020 model, computed fresh from the values you enter below. It is "
@@ -1132,9 +1117,7 @@ elif page == "New Sensor Reading Prediction":
     with st.form("sensor_prediction_form"):
         col1, col2 = st.columns(2)
         air_temp = col1.number_input("Air Temperature (K)", value=300.0, step=0.1)
-        process_temp = col2.number_input(
-            "Process Temperature (K)", value=310.0, step=0.1
-        )
+        process_temp = col2.number_input("Process Temperature (K)", value=310.0, step=0.1)
         col3, col4 = st.columns(2)
         rot_speed = col3.number_input("Rotational Speed (rpm)", value=1500, step=10)
         torque = col4.number_input("Torque (Nm)", value=40.0, step=0.5)
@@ -1142,9 +1125,7 @@ elif page == "New Sensor Reading Prediction":
         tool_wear = col5.number_input("Tool Wear (min)", value=50, step=1)
         part_type = col6.selectbox("Part Quality Type", ["H", "M", "L"])
 
-        sensor_submitted = st.form_submit_button(
-            "Run Live Sensor Prediction", use_container_width=True
-        )
+        sensor_submitted = st.form_submit_button("Run Live Sensor Prediction", use_container_width=True)
 
     if sensor_submitted:
         proba, top_factors = run_ai4i_live_prediction(
@@ -1160,7 +1141,7 @@ elif page == "New Sensor Reading Prediction":
         st.dataframe(factors_df, use_container_width=True)
 
 elif page == "Sensor Component I":
-    st.title("Sensor-Detection Track: Component I (Statistical Analysis)")
+    render_page_header("Sensor Component I", "\U0001F4D0", "Statistical Analysis -- real results")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_component1_results", conn)
     for ds in df.dataset_name.unique():
@@ -1171,7 +1152,7 @@ elif page == "Sensor Component I":
         )
 
 elif page == "Sensor Component II":
-    st.title("Sensor-Detection Track: Component II (Pattern Discovery)")
+    render_page_header("Sensor Component II", "\U0001F500", "Pattern Discovery -- real results")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_component2_results", conn)
     for ds in df.dataset_name.unique():
@@ -1187,7 +1168,7 @@ elif page == "Sensor Component II":
     )
 
 elif page == "Sensor Model Performance":
-    st.title("Sensor-Detection Track: Model Performance")
+    render_page_header("Sensor Model Performance", "\U0001F4CA", "Real, verified model comparison across both sensor datasets")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_model_results", conn)
     for ds in df.dataset_name.unique():
