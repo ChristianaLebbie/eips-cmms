@@ -410,7 +410,7 @@ if st.sidebar.button("Log out"):
 st.sidebar.markdown("---")
 
 track = st.sidebar.radio(
-    "Track", ["Case-Study (CMMS)", "Sensor-Detection (AI4I 2020 / Azure PdM)"]
+    "Track", ["Case-Study (CMMS)", "IoT-Based Predictive Maintenance (AI4I 2020 / Azure PdM)"]
 )
 st.sidebar.markdown("---")
 
@@ -438,11 +438,11 @@ else:
     page = st.sidebar.radio(
         "Navigate",
         [
-            "Sensor Overview",
-            "New Sensor Reading Prediction",
-            "Sensor Component I",
-            "Sensor Component II",
-            "Sensor Model Performance",
+            "IoT Overview",
+            "New IoT Reading Prediction",
+            "IoT Component I",
+            "IoT Component II",
+            "IoT Model Performance",
         ],
     )
 
@@ -1080,16 +1080,16 @@ elif page == "System Information":
       not an engineering-validated failure label.
     - The active deployed model is XGBoost, not TabPFN, despite TabPFN's higher
       PR-AUC, because of the recall trade-off discussed on the Model Performance page.
-    - The sensor-detection track (AI4I 2020, Azure PdM) is shown separately under
-      its own track selector, and is never merged with or compared numerically
-      against this case-study track.
+    - The IoT-based predictive maintenance track (AI4I 2020, Azure PdM) is shown
+      separately under its own track selector, and is never merged with or
+      compared numerically against this case-study track.
     - New Machine Prediction gives a real, live inference from the trained model
       for hand-entered inputs; it is not connected to a live IoT/sensor feed --
       real-time sensor integration remains future work, as stated in the thesis.
     """)
 
-elif page == "Sensor Overview":
-    render_page_header("Sensor-Detection Track", "\U0001F4E1", "Overview of the AI4I 2020 and Azure PdM datasets")
+elif page == "IoT Overview":
+    render_page_header("IoT-Based Predictive Maintenance Track", "\U0001F4E1", "Overview of the AI4I 2020 and Azure PdM datasets")
     st.warning(
         "This track uses two public sensor datasets (AI4I 2020, Azure PdM). "
         "It is kept strictly separate from the case-study track above -- "
@@ -1103,8 +1103,8 @@ elif page == "Sensor Overview":
         "Component II, and model-comparison results."
     )
 
-elif page == "New Sensor Reading Prediction":
-    render_page_header("New Sensor Reading Prediction", "\u26A1", "Live Inference from the real trained AI4I 2020 model")
+elif page == "New IoT Reading Prediction":
+    render_page_header("New IoT Reading Prediction", "\u26A1", "Live Inference from the real trained AI4I 2020 model")
     st.warning(
         "Honest note: this is a genuine, live prediction from the actual trained "
         "AI4I 2020 model, computed fresh from the values you enter below. It is "
@@ -1140,8 +1140,8 @@ elif page == "New Sensor Reading Prediction":
         factors_df = pd.DataFrame(top_factors, columns=["Feature", "SHAP value"])
         st.dataframe(factors_df, use_container_width=True)
 
-elif page == "Sensor Component I":
-    render_page_header("Sensor Component I", "\U0001F4D0", "Statistical Analysis -- real results")
+elif page == "IoT Component I":
+    render_page_header("IoT Component I", "\U0001F4D0", "Statistical Analysis -- real results")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_component1_results", conn)
     for ds in df.dataset_name.unique():
@@ -1151,8 +1151,8 @@ elif page == "Sensor Component I":
             use_container_width=True,
         )
 
-elif page == "Sensor Component II":
-    render_page_header("Sensor Component II", "\U0001F500", "Pattern Discovery -- real results")
+elif page == "IoT Component II":
+    render_page_header("IoT Component II", "\U0001F500", "Pattern Discovery -- real results")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_component2_results", conn)
     for ds in df.dataset_name.unique():
@@ -1167,8 +1167,8 @@ elif page == "Sensor Component II":
         "on Azure PdM. There is no universal winner across datasets."
     )
 
-elif page == "Sensor Model Performance":
-    render_page_header("Sensor Model Performance", "\U0001F4CA", "Real, verified model comparison across both sensor datasets")
+elif page == "IoT Model Performance":
+    render_page_header("IoT Model Performance", "\U0001F4CA", "Real, verified model comparison across both IoT-based predictive-maintenance datasets")
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM sensor_model_results", conn)
     for ds in df.dataset_name.unique():
