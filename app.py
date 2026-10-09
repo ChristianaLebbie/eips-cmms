@@ -161,6 +161,42 @@ def load_model_bundle():
     return joblib.load("model_bundle.joblib")
 
 
+@st.cache_resource
+def load_ai4i_model_bundle():
+    return joblib.load("ai4i_model_bundle.joblib")
+
+
+def run_ai4i_live_prediction(air_temp, process_temp, rot_speed, torque, tool_wear, part_type):
+    """Real, live inference on the actual trained AI4I 2020 XGBoost model.
+    This is a genuine new calculation from hand-entered sensor readings --
+    it is not connected to a live physical sensor feed; no such feed exists
+    for this public benchmark dataset, and this thesis never claims one."""
+    bundle = load_ai4i_model_bundle()
+    model = bundle["model"]
+    scaler = bundle["scaler"]
+    num_cols = bundle["num_cols"]
+    feature_columns = bundle["feature_columns"]
+
+    row = {c: 0 for c in feature_columns}
+    row["Air_temperature_K"] = air_temp
+    row["Process_temperature_K"] = process_temp
+    row["Rotational_speed_rpm"] = rot_speed
+    row["Torque_Nm"] = torque
+    row["Tool_wear_min"] = tool_wear
+    row[f"Type_{part_type}"] = 1
+
+    X = pd.DataFrame([row])[feature_columns]
+    X_scaled = X.copy()
+    X_scaled[num_cols] = scaler.transform(X[num_cols])
+    proba = float(model.predict_proba(X_scaled)[:, 1][0])
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_scaled)[0]
+    top_idx = np.argsort(-np.abs(shap_values))[:5]
+    top_factors = [(feature_columns[i], float(shap_values[i])) for i in top_idx]
+    return proba, top_factors
+
+
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
@@ -206,26 +242,8 @@ def load_model_versions():
 
 
 @st.cache_data
-def load_pm_wo_recency():
-    """Real recency signal from the register's own Last Completed PM/WO
-    date fields -- the only genuine, dated temporal signal this CMMS
-    export contains. Dates are stored as the literal string 'Not Recorded'
-    where missing; those rows are dropped here rather than imputed."""
-    conn = get_connection()
-    ar = pd.read_sql_query(
-        'SELECT "Last Completed PM", "Last Completed WO" FROM asset_register_full', conn
-    )
-    pm = pd.to_datetime(ar["Last Completed PM"], format="%Y/%m/%d", errors="coerce").dropna()
-    wo = pd.to_datetime(ar["Last Completed WO"], format="%Y/%m/%d", errors="coerce").dropna()
-    pm_month = pm.dt.to_period("M").astype(str).value_counts().sort_index()
-    wo_month = wo.dt.to_period("M").astype(str).value_counts().sort_index()
-    months = sorted(set(pm_month.index) | set(wo_month.index))
-    out = pd.DataFrame({
-        "month": months,
-        "Last Completed PM": [int(pm_month.get(m, 0)) for m in months],
-        "Last Completed WO": [int(wo_month.get(m, 0)) for m in months],
-    })
-    return out, len(pm), len(wo)
+def load_azure_daily():
+    return pd.read_csv("azure_daily_lean.csv")
 
 
 @st.cache_data
@@ -391,30 +409,48 @@ if st.sidebar.button("Log out"):
     st.rerun()
 st.sidebar.markdown("---")
 
-nav_options = [
-    "Dashboard",
-    "Asset Register",
-    "Work Orders",
-    "PM / Task History",
-    "Run Prediction",
-    "New Machine Prediction",
-    "Upload Dataset (Batch Prediction)",
-    "Explainability",
-    "Alerts",
-    "Prediction History",
-    "Model Performance",
-    "Peer-Adjusted Analysis",
-    "Analytics Dashboard",
-    "System Information",
-]
-if st.session_state.role == "admin":
-    nav_options.append("Admin: User Management")
-page = st.sidebar.radio("Navigate", nav_options)
+track = st.sidebar.radio(
+    "Track", ["Case-Study (CMMS)", "Sensor-Detection (AI4I 2020 / Azure PdM)"]
+)
+st.sidebar.markdown("---")
+
+if track == "Case-Study (CMMS)":
+    nav_options = [
+        "Dashboard",
+        "Asset Register",
+        "Work Orders",
+        "PM / Task History",
+        "Run Prediction",
+        "New Machine Prediction",
+        "Upload Dataset (Batch Prediction)",
+        "Explainability",
+        "Alerts",
+        "Prediction History",
+        "Model Performance",
+        "Peer-Adjusted Analysis",
+        "Analytics Dashboard",
+        "System Information",
+    ]
+    if st.session_state.role == "admin":
+        nav_options.append("Admin: User Management")
+    page = st.sidebar.radio("Navigate", nav_options)
+else:
+    page = st.sidebar.radio(
+        "Navigate",
+        [
+            "Sensor Overview",
+            "New Sensor Reading Prediction",
+            "Sensor Component I",
+            "Sensor Component II",
+            "Sensor Model Performance",
+        ],
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
     "All analysis, dashboards, and reporting are delivered "
-    "directly inside this application. No external BI tool is used."
+    "directly inside this application. No external BI tool is used. "
+    "The two tracks above are kept strictly separate."
 )
 
 preds = load_predictions_df()
@@ -825,6 +861,18 @@ elif page == "Model Performance":
     )
     st.dataframe(perf, use_container_width=True)
 
+    col1, col2 = st.columns(2)
+    col1.image(
+        "images/fig5_1_prauc-1.png",
+        caption="PR-AUC comparison (real results)",
+        use_container_width=True,
+    )
+    col2.image(
+        "images/fig5_2_rocauc-1.png",
+        caption="ROC-AUC comparison (real results)",
+        use_container_width=True,
+    )
+
     st.subheader("Precision-Recall and ROC Curves")
     col3, col4 = st.columns(2)
     col3.image("images/fig5_pr_casestudy-1.png", use_container_width=True)
@@ -994,23 +1042,22 @@ elif page == "Analytics Dashboard":
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    st.subheader("Real Recency: Last-Completed-PM/WO Dates, by Month")
-    recency_df, n_pm, n_wo = load_pm_wo_recency()
+    st.subheader("Real Time-Series: Azure PdM Daily Failure Counts (Full Real Year, 2015)")
     st.caption(
-        f"The genuine dated signal this CMMS export does contain: {n_pm:,} assets "
-        f"({n_pm/4426*100:.1f}% of the register) carry a real Last Completed PM date, "
-        f"and {n_wo:,} assets ({n_wo/4426*100:.1f}%) carry a real Last Completed WO date. "
-        "Shown here by month rather than fabricating a time series the export does not have."
+        "This is real, genuine date-stamped data from the Azure PdM sensor dataset -- "
+        "366 real days, 100 real machines. Shown here to demonstrate true time-series "
+        "visualization capability; kept separate from the case-study track as always."
     )
-    fig_recency = px.bar(
-        recency_df, x="month", y=["Last Completed PM", "Last Completed WO"],
-        barmode="group", color_discrete_sequence=["#D97B29", "#4C72B0"],
+    daily = load_azure_daily()
+    fig_line = px.area(
+        daily, x="date", y="failure_count",
+        color_discrete_sequence=["#D97B29"],
     )
-    fig_recency.update_layout(
+    fig_line.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EEF5",
-        xaxis_title="Month", yaxis_title="Number of real assets", legend_title="Field",
+        xaxis_title="Date", yaxis_title="Real Failure-Days (across 100 machines)",
     )
-    st.plotly_chart(fig_recency, use_container_width=True)
+    st.plotly_chart(fig_line, use_container_width=True)
 
 elif page == "System Information":
     render_page_header("System Information", "\u2699\uFE0F", "Model versions, database contents, and known limitations")
@@ -1033,7 +1080,150 @@ elif page == "System Information":
       not an engineering-validated failure label.
     - The active deployed model is XGBoost, not TabPFN, despite TabPFN's higher
       PR-AUC, because of the recall trade-off discussed on the Model Performance page.
+    - The sensor-detection track (AI4I 2020, Azure PdM) is shown separately under
+      its own track selector, and is never merged with or compared numerically
+      against this case-study track.
     - New Machine Prediction gives a real, live inference from the trained model
       for hand-entered inputs; it is not connected to a live IoT/sensor feed --
       real-time sensor integration remains future work, as stated in the thesis.
     """)
+
+elif page == "Sensor Overview":
+    render_page_header("Sensor-Detection Track", "\U0001F4E1", "Overview of the AI4I 2020 and Azure PdM datasets")
+    st.warning(
+        "This track uses two public sensor datasets (AI4I 2020, Azure PdM). "
+        "It is kept strictly separate from the case-study track above -- "
+        "never merged, never compared numerically."
+    )
+    col1, col2 = st.columns(2)
+    col1.metric("AI4I 2020 records", "10,000")
+    col2.metric("Azure PdM records (aggregated)", "36,600")
+    st.write(
+        "Use the pages on the left to see each dataset's real Component I, "
+        "Component II, and model-comparison results."
+    )
+
+elif page == "New Sensor Reading Prediction":
+    render_page_header("New Sensor Reading Prediction", "\u26A1", "Live Inference from the real trained AI4I 2020 model")
+    st.warning(
+        "Honest note: this is a genuine, live prediction from the actual trained "
+        "AI4I 2020 model, computed fresh from the values you enter below. It is "
+        "NOT connected to a live physical sensor or IoT feed -- AI4I 2020 is a "
+        "fixed, historical public benchmark dataset, and this thesis never claims "
+        "real-time hardware integration. Real-time sensor integration remains "
+        "future work."
+    )
+
+    with st.form("sensor_prediction_form"):
+        col1, col2 = st.columns(2)
+        air_temp = col1.number_input("Air Temperature (K)", value=300.0, step=0.1)
+        process_temp = col2.number_input("Process Temperature (K)", value=310.0, step=0.1)
+        col3, col4 = st.columns(2)
+        rot_speed = col3.number_input("Rotational Speed (rpm)", value=1500, step=10)
+        torque = col4.number_input("Torque (Nm)", value=40.0, step=0.5)
+        col5, col6 = st.columns(2)
+        tool_wear = col5.number_input("Tool Wear (min)", value=50, step=1)
+        part_type = col6.selectbox("Part Quality Type", ["H", "M", "L"])
+
+        sensor_submitted = st.form_submit_button("Run Live Sensor Prediction", use_container_width=True)
+
+    if sensor_submitted:
+        proba, top_factors = run_ai4i_live_prediction(
+            air_temp, process_temp, rot_speed, torque, tool_wear, part_type
+        )
+        st.success("Live prediction computed from the real trained AI4I 2020 model.")
+        c1, c2 = st.columns(2)
+        c1.metric("Failure probability", f"{proba:.3f}")
+        c2.metric("Predicted outcome", "Failure" if proba >= 0.5 else "No Failure")
+
+        st.subheader("Top factors driving this specific prediction (real SHAP values)")
+        factors_df = pd.DataFrame(top_factors, columns=["Feature", "SHAP value"])
+        st.dataframe(factors_df, use_container_width=True)
+
+elif page == "Sensor Component I":
+    render_page_header("Sensor Component I", "\U0001F4D0", "Statistical Analysis -- real results")
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM sensor_component1_results", conn)
+    for ds in df.dataset_name.unique():
+        st.subheader(ds)
+        st.dataframe(
+            df[df.dataset_name == ds][["test_name", "statistic", "p_value", "finding"]],
+            use_container_width=True,
+        )
+
+elif page == "Sensor Component II":
+    render_page_header("Sensor Component II", "\U0001F500", "Pattern Discovery -- real results")
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM sensor_component2_results", conn)
+    for ds in df.dataset_name.unique():
+        st.subheader(ds)
+        st.dataframe(
+            df[df.dataset_name == ds][["metric_name", "metric_value", "finding"]],
+            use_container_width=True,
+        )
+    st.caption(
+        "Note the ranking-comparison finding differs by dataset: the global anomaly "
+        "detector underperforms a simple raw ranking on AI4I 2020, but outperforms it "
+        "on Azure PdM. There is no universal winner across datasets."
+    )
+
+elif page == "Sensor Model Performance":
+    render_page_header("Sensor Model Performance", "\U0001F4CA", "Real, verified model comparison across both sensor datasets")
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM sensor_model_results", conn)
+    for ds in df.dataset_name.unique():
+        st.subheader(ds)
+        sub = df[df.dataset_name == ds][
+            ["model_name", "pr_auc", "roc_auc", "f1", "recall", "precision_val"]
+        ]
+        sub.columns = ["Model", "PR-AUC", "ROC-AUC", "F1", "Recall", "Precision"]
+        st.dataframe(sub, use_container_width=True)
+
+    st.subheader("AI4I 2020 -- Real Charts")
+    col1, col2 = st.columns(2)
+    col1.image("images/fig5_pr_ai4i-1.png", use_container_width=True)
+    col2.image("images/fig5_roc_ai4i-1.png", use_container_width=True)
+    col3, col4 = st.columns(2)
+    col3.image(
+        "images/fig5_9_cm_xgb_ai4i-1.png",
+        caption="XGBoost confusion matrix",
+        use_container_width=True,
+    )
+    col4.image(
+        "images/fig5_15_shap_ai4i-1.png",
+        caption="XGBoost SHAP importance",
+        use_container_width=True,
+    )
+    st.image(
+        "images/fig5_10_clusters_ai4i-1.png",
+        caption="Component II cluster failure rates (k=4)",
+        use_container_width=True,
+    )
+
+    st.subheader("Azure PdM -- Real Charts")
+    col5, col6 = st.columns(2)
+    col5.image("images/fig5_pr_azure-1.png", use_container_width=True)
+    col6.image("images/fig5_roc_azure-1.png", use_container_width=True)
+    col7, col8 = st.columns(2)
+    col7.image(
+        "images/fig5_11_cm_xgb_azure-1.png",
+        caption="XGBoost confusion matrix",
+        use_container_width=True,
+    )
+    col8.image(
+        "images/fig5_16_shap_azure-1.png",
+        caption="XGBoost SHAP importance",
+        use_container_width=True,
+    )
+    st.image(
+        "images/fig5_12_clusters_azure-1.png",
+        caption="Component II cluster failure-day rates (k=5)",
+        use_container_width=True,
+    )
+
+    st.subheader("Ranking Strategy: No Universal Winner (Real)")
+    st.image("images/fig5_13_ranking_flip-1.png", use_container_width=True)
+    st.caption(
+        "The global anomaly detector underperforms a simple raw ranking on AI4I 2020, "
+        "but outperforms it on Azure PdM -- a genuine, dataset-dependent finding."
+    )
