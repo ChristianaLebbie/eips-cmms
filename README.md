@@ -35,6 +35,7 @@ yourself -- there is no public sign-up.
 - Run Prediction / Explainability / Alerts / Prediction History -- the
   ML decision-support layer (4,024-asset modelling population)
 - Model Performance / Peer-Adjusted Analysis -- real Component II/III results
+- Analytics Dashboard -- real, interactive charts, including a real
+  recency chart built from the register's own Last Completed PM/WO dates
 - Admin: User Management -- add/view users (admin role only)
 - System Information -- database contents and known limitations
-- Sensor-Detection track -- AI4I 2020 and Azure PdM, kept strictly separate
